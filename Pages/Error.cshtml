@@ -1,0 +1,11 @@
+@page
+@model ErrorModel
+
+<div class="banner banner-error">
+    <h2>Something went wrong</h2>
+    <p>An unexpected error occurred. Check the server logs for details.</p>
+    @if (Model.ShowRequestId)
+    {
+        <p><small>Request ID: <code>@Model.RequestId</code></small></p>
+    }
+</div>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>a3f2d7d1-3e4b-4b1a-9c6c-7b3f7b1c7e10</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Proxmox VE API client -->
+    <PackageReference Include="Corsinvest.ProxmoxVE.Api" Version="9.2.1" />
+    <!-- Server-side helpers for working with HTMX request/response headers -->
+    <PackageReference Include="Htmx" Version="1.12.0" />
+    <!-- Typed hx-page / hx-page-handler tag helpers, so HTMX urls are generated the same way asp-page urls are -->
+    <PackageReference Include="Htmx.TagHelpers" Version="1.12.0" />
+  </ItemGroup>
+
+</Project>
