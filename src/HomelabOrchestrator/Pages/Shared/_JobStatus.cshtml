@@ -1,0 +1,45 @@
+@using HomelabOrchestrator.Services.Jobs
+@model ProvisioningJob
+
+@functions {
+    static string StageLabel(ProvisioningStage stage) => stage switch
+    {
+        ProvisioningStage.Queued => "Queued…",
+        ProvisioningStage.Allocating => "Allocating a VMID and address…",
+        ProvisioningStage.CreatingContainer => "Creating the container…",
+        ProvisioningStage.WaitingForProxmox => "Waiting for Proxmox to finish…",
+        _ => "Working…",
+    };
+}
+
+@if (Model.Stage == ProvisioningStage.Succeeded)
+{
+    <div id="job-status" class="banner banner-success">
+        <h2>Container created</h2>
+        <p>
+            <strong>@Model.Request.Hostname</strong> (VMID @Model.Vmid) is up at
+            <strong>@Model.IpAddress</strong>, built from <code>@Model.Template</code>.
+        </p>
+    </div>
+}
+else if (Model.Stage == ProvisioningStage.Failed)
+{
+    <div id="job-status" class="banner banner-error">
+        <h2>Provisioning failed</h2>
+        <p>@Model.Error</p>
+    </div>
+}
+else
+{
+    <div id="job-status" class="card"
+         hx-get
+         hx-page="Index"
+         hx-page-handler="JobStatus"
+         hx-route-jobId="@Model.Id"
+         hx-trigger="load delay:1s"
+         hx-target="#job-status"
+         hx-swap="outerHTML">
+        <h2>@StageLabel(Model.Stage)</h2>
+        <p class="muted">Job <code>@Model.Id</code></p>
+    </div>
+}
