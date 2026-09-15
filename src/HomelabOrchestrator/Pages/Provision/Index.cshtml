@@ -1,0 +1,74 @@
+@page
+@model IndexModel
+
+<h2>New LXC container</h2>
+
+@if (!ModelState.IsValid)
+{
+    <div class="banner banner-error">
+        <h2>Could not reach Proxmox</h2>
+        <div asp-validation-summary="All"></div>
+    </div>
+}
+else
+{
+    <form method="post"
+          hx-post
+          hx-page="Index"
+          hx-page-handler="Review"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#spinner"
+          hx-disabled-elt="find button[type='submit']">
+        @Html.AntiForgeryToken()
+
+        <partial name="Shared/_ConnectionInfo" model="Model.Placement" />
+
+        <div class="card">
+            <h2>Container settings</h2>
+
+            <div class="field">
+                <label asp-for="Form.Hostname"></label>
+                <input asp-for="Form.Hostname" placeholder="my-new-container" autocomplete="off" />
+                <span asp-validation-for="Form.Hostname" class="field-error"></span>
+            </div>
+
+            <div class="field-row">
+                <div class="field">
+                    <label asp-for="Form.Cores"></label>
+                    <input asp-for="Form.Cores" type="number" min="1" max="32" />
+                </div>
+                <div class="field">
+                    <label asp-for="Form.MemoryMB">Memory (MB)</label>
+                    <input asp-for="Form.MemoryMB" type="number" min="128" step="128" />
+                </div>
+                <div class="field">
+                    <label asp-for="Form.SwapMB">Swap (MB)</label>
+                    <input asp-for="Form.SwapMB" type="number" min="0" step="128" />
+                </div>
+                <div class="field">
+                    <label asp-for="Form.DiskGB">Disk (GB)</label>
+                    <input asp-for="Form.DiskGB" type="number" min="1" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label asp-for="Form.SshPublicKey">SSH public key</label>
+                <textarea asp-for="Form.SshPublicKey" rows="3" placeholder="ssh-ed25519 AAAA..."></textarea>
+                <span asp-validation-for="Form.SshPublicKey" class="field-error"></span>
+            </div>
+
+            <div class="field-row">
+                <label class="checkbox"><input asp-for="Form.Start" type="checkbox" /> Start after creation</label>
+                <label class="checkbox"><input asp-for="Form.StartAtBoot" type="checkbox" /> Start at boot</label>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn btn-primary">Review</button>
+                <span id="spinner" class="htmx-indicator">Working&hellip;</span>
+            </div>
+        </div>
+    </form>
+}
+
+<div id="result"></div>

@@ -1,72 +1,380 @@
 # Homelab Orchestrator
 
-An ASP.NET Core Razor Pages app for provisioning LXC containers on Proxmox VE,
-using [`Corsinvest.ProxmoxVE.Api`](https://github.com/Corsinvest/cv4pve-api-dotnet)
-to talk to Proxmox and [htmx](https://htmx.org) for the interactive parts of the
-UI (no client-side framework, no full page reloads).
+Homelab Orchestrator is a small, self-hosted ASP.NET Core application for provisioning and maintaining Proxmox LXC containers.
 
-This is a Razor Pages port of a Go CLI that did the same thing: look up the next
-free VMID, derive its address, find the newest Debian 13 template, ask for a
-hostname/sizing, show a confirmation, then create the container and wait for the
-Proxmox task to finish.
+The goal is to provide an appliance-like workflow:
 
-## Project layout
+1. Enter a hostname and resource requirements.
+2. Create a Debian LXC through the Proxmox API.
+3. Assign an address using the homelab's established IP convention.
+4. Wait for the container and SSH to become available.
+5. Apply the Ansible `base` role.
+6. Use the web interface for later maintenance or approved application playbooks.
 
-- `Pages/Index.cshtml(.cs)` — the whole workflow lives on one page:
-  - `OnGet` loads the next VMID/address/template from Proxmox.
-  - `OnGetRefresh` (htmx) re-fetches just that panel, e.g. if the VMID got taken.
-  - `OnPostReview` (htmx) validates the form and renders a confirmation summary.
-  - `OnPostCreate` (htmx) creates the container and waits for the task.
-- `Services/ProxmoxService.cs` — the only place that talks to `PveClient`.
-- `Models/` — configuration (`ProxmoxOptions`), the form model, and the request/result
-  types passed to/from the service.
+This project intentionally does not use OpenTofu or maintain a static Ansible inventory. Proxmox remains the source of truth for compute resources, and inventory is generated only when an Ansible operation runs.
+
+## Status
+
+Milestone 1 (provisioning parity) is implemented except for the two steps that depend on
+Ansible, which does not exist in this repository yet: waiting for SSH and applying the
+`base` role. Today, from the web UI, an operator can:
+
+- see the next available VMID, the address it maps to, and the newest Debian 13 template,
+  refreshed on demand;
+- submit a hostname and sizing, review a summary, and confirm;
+- have the request queued and executed by a background worker that recalculates the
+  VMID/address/template itself immediately before creating anything — the browser preview
+  shown earlier is never trusted or reused;
+- watch the job's stage update live over HTMX polling until it succeeds or fails.
+
+See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
+
+Maintenance, the playbook catalog, and execution history (Milestones 2-4) are design-only —
+described under [Planned interface](#planned-interface) but not yet implemented.
+
+## Planned interface
+
+### Provision
+
+Create a Debian 13 LXC and apply its initial configuration.
+
+The operator supplies:
+
+- hostname;
+- CPU cores;
+- memory;
+- swap;
+- disk size;
+- start and start-at-boot preferences.
+
+The server determines:
+
+- the next VMID;
+- the IP address;
+- node, storage, bridge, subnet, gateway, and DNS configuration;
+- the newest available Debian 13 template;
+- SSH key;
+- required Proxmox features and tags.
+
+A provisioning job should expose each stage independently so a failed Ansible run can be retried without recreating the LXC.
+
+### Maintenance
+
+Run common, controlled operations against selected containers, including:
+
+- checking for package updates;
+- applying package updates;
+- checking failed systemd units;
+- checking disk usage;
+- identifying containers that require a reboot;
+- reapplying the Ansible `base` role;
+- rebooting selected containers.
+
+Hosts should be discovered from Proxmox and may be filtered using Proxmox tags.
+
+### Playbooks
+
+Run approved Ansible playbooks against one or more discovered hosts. Examples include:
+
+- installing application software;
+- configuring PostgreSQL;
+- configuring Nginx;
+- performing database maintenance;
+- installing monitoring agents.
+
+The UI must only expose playbooks from an approved catalog. It must not provide an arbitrary command or arbitrary playbook-path input.
+
+### Executions
+
+Display current and previous operations with:
+
+- operation type;
+- selected targets;
+- submitted inputs;
+- start and finish times;
+- current stage;
+- exit status;
+- captured output;
+- retry actions where appropriate.
+
+## Architecture
+
+```text
+Browser
+  |
+  | Razor Pages + HTMX
+  v
+ASP.NET Core application
+  |
+  +-- Background job queue
+  |     |
+  |     +-- Corsinvest.ProxmoxVE.Api
+  |     |     |
+  |     |     `-- Proxmox VE
+  |     |
+  |     `-- ansible-playbook
+  |           |
+  |           `-- Newly created or selected LXCs
+  |
+  `-- SQLite execution history (planned)
+```
+
+### Technology choices
+
+- .NET 10
+- ASP.NET Core Razor Pages
+- HTMX
+- `Corsinvest.ProxmoxVE.Api`
+- hosted background services and channels
+- Ansible Core
+- SQLite for execution history when persistence is introduced
+- native Linux binaries and systemd services
+
+## Source-of-truth rules
+
+- **Proxmox** is the source of truth for LXCs, VMIDs, runtime state, and tags.
+- **Git** is the source of truth for application code, approved playbooks, roles, and playbook metadata.
+- **Application configuration/secrets** provide Proxmox credentials, SSH material, and environment-specific defaults.
+- **SQLite** may store job history and UI metadata, but it must not become a duplicate static machine inventory.
+- **Ansible inventory** is generated in memory or under `/run/homelab-orchestrator` for an individual execution and is never committed.
+
+## Repository layout
+
+The intended repository layout is:
+
+```text
+homelab-orchestrator/
+|-- AGENTS.md
+|-- README.md
+|-- HomelabOrchestrator.sln
+|-- src/
+|   `-- HomelabOrchestrator/
+|       |-- Models/
+|       |-- Options/
+|       |-- Pages/
+|       |   |-- Provision/
+|       |   |-- Maintenance/
+|       |   |-- Playbooks/
+|       |   `-- Executions/
+|       |-- Services/
+|       |   |-- Proxmox/
+|       |   |-- Ansible/
+|       |   `-- Jobs/
+|       `-- wwwroot/
+|-- ansible/
+|   |-- ansible.cfg
+|   |-- requirements.yml
+|   |-- playbooks/
+|   |   |-- apply-base.yml
+|   |   |-- maintenance/
+|   |   `-- catalog/
+|   `-- roles/
+|       `-- base/
+|           |-- defaults/main.yml
+|           |-- handlers/main.yml
+|           |-- tasks/main.yml
+|           `-- templates/
+`-- tests/
+    `-- HomelabOrchestrator.Tests/
+```
+
+## Initial infrastructure defaults
+
+The proof of concept currently assumes:
+
+| Setting | Default |
+| --- | --- |
+| Proxmox API port | `8006` |
+| Proxmox node | `pve` |
+| Template storage | `local` |
+| Root filesystem storage | `local-lvm` |
+| Network bridge | `vmbr0` |
+| Container network | `10.0.150.0/16` |
+| Gateway | `10.0.1.1` |
+| DNS servers | `10.0.200.1`, `10.0.200.2` |
+| LXC type | Unprivileged |
+| LXC features | `nesting=1` |
+| Managed tags | `base`, `managed-by-orchestrator` |
+| Default CPU | 2 cores |
+| Default memory | 2048 MB |
+| Default swap | 512 MB |
+| Default disk | 8 GB |
+
+These are configuration defaults, not hard-coded business rules. They should be overridable through ASP.NET Core configuration.
+
+The current IP convention maps the VMID to the final octet:
+
+```text
+VMID 102 -> 10.0.150.102
+```
+
+The application must reject VMIDs that cannot safely map to a usable final octet. A future address-allocation strategy may replace this convention.
 
 ## Configuration
 
-Non-secret defaults live in `appsettings.json` under `Proxmox`. The three
-required values (`Host`, `TokenId`, `TokenSecret`) are left blank there and must
-be supplied separately — the app fails fast on startup if they're missing.
+Non-secret defaults belong in `appsettings.json` or environment-specific configuration:
 
-For local development, use [user-secrets](https://learn.microsoft.com/aspnet/core/security/app-secrets):
-
-```bash
-dotnet user-secrets set "Proxmox:Host" "pve.example.lan"
-dotnet user-secrets set "Proxmox:TokenId" "root@pam!orchestrator"
-dotnet user-secrets set "Proxmox:TokenSecret" "00000000-0000-0000-0000-000000000000"
+```json
+{
+  "Proxmox": {
+    "Host": "10.0.3.1",
+    "Port": 8006,
+    "Node": "pve",
+    "TemplateStorage": "local",
+    "RootfsStorage": "local-lvm",
+    "Bridge": "vmbr0",
+    "Gateway": "10.0.1.1",
+    "NetworkPrefix": "10.0.150",
+    "Subnet": 16,
+    "NameServers": ["10.0.200.1", "10.0.200.2"],
+    "SshPublicKeyPath": "/var/lib/homelab-orchestrator/id_ed25519.pub",
+    "ValidateCertificate": false
+  }
+}
 ```
 
-In any other environment, set the equivalent environment variables (ASP.NET
-Core maps `__` to nested configuration sections):
+Supply the Proxmox token through secrets or the process environment:
 
 ```bash
-export Proxmox__Host=pve.example.lan
-export Proxmox__TokenId="root@pam!orchestrator"
-export Proxmox__TokenSecret="00000000-0000-0000-0000-000000000000"
+export Proxmox__ApiToken='automation@pve!homelab-orchestrator=TOKEN_SECRET'
 ```
 
-Everything else in the `Proxmox` section is a plain override, e.g.:
+Never commit real tokens, passwords, private SSH keys, generated inventory, or playbook extra-variable files.
 
-| Key | Default | Meaning |
-|---|---|---|
-| `Node` | `pve` | Node to create the container on |
-| `TemplateStorage` | `local` | Storage to search for the `debian-13-*` template |
-| `RootfsStorage` | `local-lvm` | Storage for the container's root filesystem |
-| `Bridge` | `vmbr0` | Network bridge |
-| `Gateway` | `10.0.1.1` | Container gateway |
-| `IpNetworkPrefix` | `10.0.150` | First three octets; the VMID becomes the last octet |
-| `IpHostMin` / `IpHostMax` | `2` / `254` | Valid range for that last octet |
-| `DefaultCores` / `DefaultMemoryMB` / `DefaultSwapMB` / `DefaultDiskGB` | `2` / `2048` / `512` / `8` | Form defaults |
-| `DefaultSshPublicKeyPath` | _(none)_ | Optional path to a public key file used to pre-fill the SSH key field |
-| `ValidateTlsCertificate` | `false` | Set to `true` if Proxmox has a trusted certificate |
+## Dynamic Ansible inventory
 
-The Proxmox API token needs permission to create containers on the configured
-node/storage (`VM.Allocate`, `VM.Config.*`, `Datastore.AllocateSpace`, etc.).
+There are two inventory paths.
 
-## Running
+For the initial `base` run, the application already knows the new address and can use an inline host list:
+
+```bash
+ansible-playbook \
+  -i '10.0.150.102,' \
+  -u root \
+  ansible/playbooks/apply-base.yml
+```
+
+For maintenance and catalog playbooks, the application should query Proxmox, filter eligible guests, and generate an inventory JSON document for that execution. Any temporary files must be written beneath:
+
+```text
+/run/homelab-orchestrator/<execution-id>/
+```
+
+The application must pass arguments through `ProcessStartInfo.ArgumentList`; do not construct a shell command by concatenating user input.
+
+## Playbook catalog
+
+Approved one-off playbooks live under `ansible/playbooks/catalog`. A playbook may have a sidecar metadata document describing the UI form:
+
+```text
+install-postgresql.yml
+install-postgresql.meta.yml
+```
+
+Example metadata:
+
+```yaml
+name: Install PostgreSQL
+description: Install and configure PostgreSQL
+category: Databases
+targets:
+  multiple: false
+  required_tags:
+    - base
+inputs:
+  - name: postgres_version
+    label: PostgreSQL version
+    type: select
+    required: true
+    default: "17"
+    choices:
+      - "16"
+      - "17"
+```
+
+Input values should be serialized to a temporary JSON extra-vars file rather than interpolated into command-line strings.
+
+## Development
+
+Requirements:
+
+- .NET 10 SDK
+- network access to the Proxmox API
+- a least-privilege Proxmox API token
+- Ansible Core, SSH access to provisioned containers — only once Ansible integration
+  (Milestone 1's remaining items) is implemented; not required to run what exists today
+
+Restore, build, and run:
 
 ```bash
 dotnet restore
-dotnet run
+dotnet build --no-restore
+dotnet test --no-build
+dotnet run --project src/HomelabOrchestrator
 ```
 
-Then open the URL printed in the console (e.g. `https://localhost:5001`).
+Once the `ansible/` directory exists, validate its content with:
+
+```bash
+ansible-playbook \
+  --syntax-check \
+  -i 'localhost,' \
+  ansible/playbooks/apply-base.yml
+```
+
+## Milestones
+
+### Milestone 1: Provisioning parity
+
+- [x] Connect through `Corsinvest.ProxmoxVE.Api`.
+- [x] Display the next VMID, calculated address, and selected template.
+- [x] Submit a provisioning job from a Razor Page.
+- [x] Create and start a Debian 13 LXC.
+- [x] Enable `nesting=1`.
+- [x] Poll and display background-job status with HTMX.
+- [ ] Wait for SSH.
+- [ ] Apply the Ansible `base` role.
+- [ ] Allow retrying the base stage without recreating the LXC.
+
+The last three items need Ansible integration, which is a separate, larger piece of work
+(see AGENTS.md's Ansible requirements) and has not been started.
+
+### Milestone 2: Maintenance
+
+- [ ] Discover managed LXCs from Proxmox.
+- [ ] Select hosts by name or tag.
+- [ ] Check and apply operating-system updates.
+- [ ] Report failed services, disk usage, and reboot requirements.
+- [ ] Reapply the `base` role.
+
+### Milestone 3: Playbook catalog
+
+- [ ] Discover approved playbooks and metadata.
+- [ ] Generate validated forms from metadata.
+- [ ] Select eligible targets.
+- [ ] Run playbooks with temporary inventory and extra-vars files.
+- [ ] Capture and display execution output.
+
+### Milestone 4: Operations hardening
+
+- [ ] Persist execution history in SQLite.
+- [ ] Add authentication and authorization.
+- [ ] Add cancellation and safe retry behavior.
+- [ ] Add retention rules for execution output.
+- [ ] Package as a native systemd service.
+- [ ] Add health checks and structured logging.
+
+## Safety principles
+
+- Preview destructive or disruptive operations before execution.
+- Require explicit confirmation before creating, deleting, stopping, or rebooting a guest.
+- Never expose API tokens, passwords, SSH private keys, or secret Ansible variables in logs or HTML.
+- Never accept arbitrary shell commands from the browser.
+- Never accept arbitrary playbook paths from the browser.
+- Recalculate VMID and IP immediately before creation; do not trust a stale browser preview.
+- Prefer idempotent Ansible roles and playbooks.
+- Preserve a created LXC when a later configuration stage fails, and make that stage retryable.
+
+## License
+
+Choose and add a license before publishing the project for broader reuse.

@@ -1,0 +1,45 @@
+@model ContainerFormModel
+
+<div class="card">
+    <h2>Create this container?</h2>
+
+    <dl class="fact-list">
+        <dt>VMID</dt><dd>@Model.Vmid <span class="muted">(preview — reassigned at creation time)</span></dd>
+        <dt>Hostname</dt><dd>@Model.Hostname</dd>
+        <dt>Address</dt><dd>@Model.IpAddress <span class="muted">(preview)</span></dd>
+        <dt>Template</dt><dd>@Model.Template <span class="muted">(preview)</span></dd>
+        <dt>CPU</dt><dd>@Model.Cores cores</dd>
+        <dt>Memory</dt><dd>@Model.MemoryMB MB (swap @Model.SwapMB MB)</dd>
+        <dt>Disk</dt><dd>@Model.DiskGB GB</dd>
+        <dt>Start now</dt><dd>@(Model.Start ? "yes" : "no")</dd>
+        <dt>Start at boot</dt><dd>@(Model.StartAtBoot ? "yes" : "no")</dd>
+    </dl>
+
+    <form method="post"
+          hx-post
+          hx-page="Index"
+          hx-page-handler="Create"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#spinner"
+          hx-disabled-elt="find button[type='submit']">
+        @Html.AntiForgeryToken()
+
+        @* VMID/address/template are not sent: the worker recalculates them itself right before creating. *@
+        <input type="hidden" name="Form.Hostname" value="@Model.Hostname" />
+        <input type="hidden" name="Form.Cores" value="@Model.Cores" />
+        <input type="hidden" name="Form.MemoryMB" value="@Model.MemoryMB" />
+        <input type="hidden" name="Form.SwapMB" value="@Model.SwapMB" />
+        <input type="hidden" name="Form.DiskGB" value="@Model.DiskGB" />
+        <input type="hidden" name="Form.SshPublicKey" value="@Model.SshPublicKey" />
+        <input type="hidden" name="Form.Start" value="@(Model.Start ? "true" : "false")" />
+        <input type="hidden" name="Form.StartAtBoot" value="@(Model.StartAtBoot ? "true" : "false")" />
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Confirm &amp; create</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('result').innerHTML = ''">
+                Cancel
+            </button>
+        </div>
+    </form>
+</div>
