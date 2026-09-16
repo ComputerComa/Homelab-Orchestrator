@@ -352,3 +352,8 @@ Do not put secrets or real token values in examples. Keep examples consistent wi
 - Do not create, destroy, stop, or reboot a real guest unless explicitly authorized.
 - Do not push commits, create releases, or alter external systems unless explicitly requested.
 - Explain any remaining operational or security limitation at handoff.
+
+
+At the end of every session either:
+Open a Pull requst if a major refactor took place
+Automatically merge and commit back to main if major infastructure changes were not made.
