@@ -434,7 +434,7 @@ The application must pass arguments through `ProcessStartInfo.ArgumentList`; do 
 ## Ansible Runner (implemented)
 
 The Ansible Runner page (`/Runner`) lets an operator run any playbook committed directly under
-`ansible/playbooks/` (not its subdirectories) against a target picked from a dropdown, with no
+`ansible/playbooks/` (not its subdirectories) against a target picked from a grouped list, with no
 free-text command or path ever accepted from the browser:
 
 - **Playbooks** are discovered by `PlaybookCatalog` (`Services/Ansible/PlaybookCatalog.cs`),
@@ -449,7 +449,14 @@ free-text command or path ever accepted from the browser:
   - a tag group — every currently running container carrying a given Proxmox tag;
   - all currently running containers (no `--limit` at all).
 
-  The dropdown is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page
+  Rather than one flat dropdown mixing containers and tags together, "Specific container" and
+  "Tag group" are separate, individually collapsible `<details>` sections (plain HTML, no
+  JavaScript) — each shows its own count and starts collapsed unless it already holds the
+  current selection. The underlying encoding is unchanged (`RunFormModel.ParseTarget()` still
+  reads a single `all` / `vm:<hostname>` / `tag:<tag>` value from one radio-button group), so
+  this is a presentation-only change.
+
+  The list is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page
   load, but that choice is never trusted as still valid once the run actually starts: the
   background worker (`AnsibleRunWorker`) re-fetches running containers immediately before
   building the `ansible-playbook` command and fails the job — without starting a process — if

@@ -37,28 +37,41 @@ else
             </div>
 
             <div class="field">
-                <label asp-for="Form.Target">Target</label>
-                <select asp-for="Form.Target">
-                    <option value="all">All running containers</option>
-                    @if (Model.Targets.RunningHostnames.Count > 0)
-                    {
-                        <optgroup label="Specific container">
-                            @foreach (var hostname in Model.Targets.RunningHostnames)
-                            {
-                                <option value="vm:@hostname">@hostname</option>
-                            }
-                        </optgroup>
-                    }
-                    @if (Model.Targets.Tags.Count > 0)
-                    {
-                        <optgroup label="Tag group">
-                            @foreach (var tag in Model.Targets.Tags)
-                            {
-                                <option value="tag:@tag">@tag</option>
-                            }
-                        </optgroup>
-                    }
-                </select>
+                <label>Target</label>
+
+                <label class="target-option">
+                    <input type="radio" asp-for="Form.Target" value="all" />
+                    All running containers
+                </label>
+
+                @if (Model.Targets.RunningHostnames.Count > 0)
+                {
+                    <details class="target-group" open="@(Model.Form.Target.StartsWith("vm:", StringComparison.Ordinal))">
+                        <summary>Specific container (@Model.Targets.RunningHostnames.Count)</summary>
+                        @foreach (var hostname in Model.Targets.RunningHostnames)
+                        {
+                            <label class="target-option">
+                                <input type="radio" asp-for="Form.Target" value="vm:@hostname" />
+                                @hostname
+                            </label>
+                        }
+                    </details>
+                }
+
+                @if (Model.Targets.Tags.Count > 0)
+                {
+                    <details class="target-group" open="@(Model.Form.Target.StartsWith("tag:", StringComparison.Ordinal))">
+                        <summary>Tag group (@Model.Targets.Tags.Count)</summary>
+                        @foreach (var tag in Model.Targets.Tags)
+                        {
+                            <label class="target-option">
+                                <input type="radio" asp-for="Form.Target" value="tag:@tag" />
+                                @tag
+                            </label>
+                        }
+                    </details>
+                }
+
                 <span asp-validation-for="Form.Target" class="field-error"></span>
                 <p class="muted">
                     Both lists are today's currently running containers — the run itself
