@@ -358,13 +358,21 @@ curl http://localhost:5050/api/inventory/containers/running -o inventory.json
 ansible-playbook -i inventory.json some-playbook.yml --limit web-01
 ```
 
-Both endpoints read live from Proxmox (`GET /nodes/{node}/lxc`) and derive each host's address
-from its VMID using the same convention provisioning uses — nothing is cached or read from a
-static file. `/containers/{vmid}` returns 404 for a VMID Proxmox doesn't know about and answers
-regardless of the container's power state; `/containers/running` silently excludes anything not
-currently running. Neither endpoint requires signing in — instead, both are restricted to
-loopback callers only (see [Authentication](#authentication-implemented)), since
-`ansible-playbook` running on the orchestrator itself is the only thing that ever needs to call
+Both endpoints read live from Proxmox (`GET /nodes/{node}/lxc`) and read each host's **actual**
+configured address from its `net0` device (`IProxmoxService.GetContainerAddressAsync`) — nothing
+is cached, read from a static file, or computed from the VMID-to-address convention. That
+convention only ever predicts what a container's address *should* be (used by provisioning to
+assign one, and by [Reconcile](#reconcile-pre-existing-containers-implemented) to check a
+candidate); reporting it as fact here would mean Ansible silently connects to the wrong address
+the moment a container's real address drifts from — or never matched — that prediction. A
+container with no static address (DHCP/manual, or no `net0` at all) is excluded from
+`/containers/running` (with a logged warning) and makes `/containers/{vmid}` fail with a clear
+error rather than inventing an address for it. `/containers/{vmid}` returns 404 for a VMID
+Proxmox doesn't know about and answers regardless of the container's power state;
+`/containers/running` silently excludes anything not currently running. Neither endpoint requires
+signing in — instead, both are restricted to loopback callers only (see
+[Authentication](#authentication-implemented)), since `ansible-playbook` running on the
+orchestrator itself is the only thing that ever needs to call
 them.
 
 These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves — that

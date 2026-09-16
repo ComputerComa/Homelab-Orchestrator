@@ -157,10 +157,15 @@ there is no SSH input anywhere in the web UI.
 - For maintenance, discover hosts from Proxmox and generate inventory for the execution.
   `IAnsibleInventoryService` (`Services/Ansible/`) already does this — reuse it rather than
   writing a second inventory generator. It composes `IProxmoxService.ListContainersAsync` with
-  the VMID-to-address convention and `SshOptions`, and is also exposed read-only at
-  `GET /api/inventory/containers/{vmid}` and `GET /api/inventory/containers/running`
-  (`Endpoints/InventoryEndpoints.cs`) for external tooling. Those two endpoints don't require
-  sign-in; they're gated by the `LocalhostOnly` policy instead — see
+  each host's **actual** address from `IProxmoxService.GetContainerAddressAsync` and `SshOptions`,
+  and is also exposed read-only at `GET /api/inventory/containers/{vmid}` and
+  `GET /api/inventory/containers/running` (`Endpoints/InventoryEndpoints.cs`) for external
+  tooling. Never use the VMID-to-address convention (`IpAddressCalculator`) here — it only
+  predicts what a container's address should be, for provisioning to assign and Reconcile to
+  check against; reporting a prediction as inventory fact means Ansible silently connects to the
+  wrong address the moment reality drifts from it. A container with no static address is excluded
+  (list) or fails clearly (single-container), never assigned a guessed one. Those two endpoints
+  don't require sign-in; they're gated by the `LocalhostOnly` policy instead — see
   [Authentication](#authentication). Apply that same policy to a third endpoint if it's ever
   added for a same-machine-only use case; don't leave it open by default.
 - `ansible/inventory_plugins/homelab_orchestrator.py` consumes those same two endpoints from the
@@ -310,7 +315,8 @@ Add tests alongside meaningful behavior. Prioritize:
 - secret redaction;
 - retry behavior after a post-creation Ansible failure;
 - the `LocalhostOnly` authorization requirement, for both loopback and non-loopback addresses;
-- reconciliation eligibility (matching/mismatched/DHCP address, already-tagged, out-of-range VMID) and that adoption re-verifies before tagging instead of trusting the caller's selection.
+- reconciliation eligibility (matching/mismatched/DHCP address, already-tagged, out-of-range VMID) and that adoption re-verifies before tagging instead of trusting the caller's selection;
+- inventory generation reporting a container's actual address even when it differs from what the VMID convention would predict.
 
 Use test doubles at the `IProxmoxService`, Ansible runner, and process boundaries. Do not require a live Proxmox server for the ordinary test suite.
 
