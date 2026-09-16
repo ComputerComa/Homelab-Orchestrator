@@ -98,7 +98,7 @@ public class ProxmoxService : IProxmoxService
                 unprivileged: true,
                 onboot: request.StartAtBoot,
                 start: request.Start,
-                tags: "base;managed-by-orchestrator",
+                tags: $"base;{ProxmoxTags.ManagedByOrchestrator}",
                 ssh_public_keys: request.SshPublicKeys,
                 features: "nesting=1");
 
@@ -151,6 +151,65 @@ public class ProxmoxService : IProxmoxService
         {
             throw WrapUnexpected(ex, "list containers");
         }
+    }
+
+    public async Task<string?> GetContainerAddressAsync(int vmid, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _client.Value.Nodes[_options.Node].Lxc[vmid].Config.VmConfig();
+            EnsureSuccess(result, $"read the configuration for container {vmid}");
+
+            var fields = (IDictionary<string, object>)result.ToData();
+            return fields.TryGetValue("net0", out var net0) ? ParseIpFromNetConfig((string)net0) : null;
+        }
+        catch (Exception ex) when (ex is not ProxmoxOperationException)
+        {
+            throw WrapUnexpected(ex, $"read the configuration for container {vmid}");
+        }
+    }
+
+    public async Task AddTagAsync(int vmid, string tag, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var configResult = await _client.Value.Nodes[_options.Node].Lxc[vmid].Config.VmConfig();
+            EnsureSuccess(configResult, $"read the configuration for container {vmid}");
+
+            var fields = (IDictionary<string, object>)configResult.ToData();
+            var currentTags = ParseTags(fields.TryGetValue("tags", out var tagsRaw) ? tagsRaw as string : null);
+
+            if (currentTags.Contains(tag))
+            {
+                return;
+            }
+
+            var updatedTags = string.Join(';', currentTags.Append(tag));
+            var updateResult = await _client.Value.Nodes[_options.Node].Lxc[vmid].Config.UpdateVm(tags: updatedTags);
+            EnsureSuccess(updateResult, $"tag container {vmid}");
+        }
+        catch (Exception ex) when (ex is not ProxmoxOperationException)
+        {
+            throw WrapUnexpected(ex, $"tag container {vmid}");
+        }
+    }
+
+    // net0 is a comma-separated "key=value" list, e.g.
+    // "name=eth0,bridge=vmbr0,gw=10.0.1.1,ip=10.0.150.102/16,hwaddr=...,type=veth".
+    // DHCP/manual configs use ip=dhcp / ip=manual instead of a literal address.
+    private static string? ParseIpFromNetConfig(string net0)
+    {
+        foreach (var part in net0.Split(','))
+        {
+            var keyValue = part.Split('=', 2);
+            if (keyValue.Length == 2 && keyValue[0] == "ip")
+            {
+                var ip = keyValue[1].Split('/', 2)[0];
+                return ip is "dhcp" or "manual" ? null : ip;
+            }
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<string> ParseTags(string? tags) =>

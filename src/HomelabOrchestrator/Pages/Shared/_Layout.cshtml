@@ -14,6 +14,7 @@
         <nav class="site-nav">
             <a href="/" class="@(Context.Request.Path == "/" ? "active" : "")">Provision</a>
             <a href="/Runner" class="@(Context.Request.Path.StartsWithSegments("/Runner") ? "active" : "")">Ansible Runner</a>
+            <a href="/Reconcile" class="@(Context.Request.Path.StartsWithSegments("/Reconcile") ? "active" : "")">Reconcile</a>
             @if (User.Identity?.IsAuthenticated == true)
             {
                 <a href="/Account/ChangePassword" class="@(Context.Request.Path.StartsWithSegments("/Account/ChangePassword") ? "active" : "")">Change password</a>

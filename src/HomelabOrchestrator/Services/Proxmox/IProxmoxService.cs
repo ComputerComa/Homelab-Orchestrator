@@ -17,4 +17,16 @@ public interface IProxmoxService
 
     /// <summary>Every LXC container on the configured node, as Proxmox currently reports it.</summary>
     Task<IReadOnlyList<ContainerSummary>> ListContainersAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The container's actual configured IPv4 address, read from its net0 device — not derived
+    /// from any convention. Null if net0 has no static address (DHCP/manual) or doesn't exist.
+    /// </summary>
+    Task<string?> GetContainerAddressAsync(int vmid, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Adds a tag to the container, re-reading its current tags immediately before writing so
+    /// nothing else's tags are lost to a stale read. A no-op if the tag is already present.
+    /// </summary>
+    Task AddTagAsync(int vmid, string tag, CancellationToken cancellationToken = default);
 }

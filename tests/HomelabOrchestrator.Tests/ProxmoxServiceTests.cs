@@ -214,4 +214,74 @@ public class ProxmoxServiceTests
         Assert.NotNull(containers[0].Tags);
         Assert.Empty(containers[0].Tags);
     }
+
+    [Fact]
+    public async Task GetContainerAddressAsync_parses_the_static_ip_out_of_net0()
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, """
+            {"data":{"net0":"name=eth0,bridge=vmbr0,gw=10.0.1.1,ip=10.0.150.141/16,hwaddr=BC:24:11:00:00:01,type=veth"}}
+            """));
+
+        Assert.Equal("10.0.150.141", await service.GetContainerAddressAsync(141));
+    }
+
+    [Theory]
+    [InlineData("name=eth0,bridge=vmbr0,ip=dhcp,type=veth")]
+    [InlineData("name=eth0,bridge=vmbr0,ip=manual,type=veth")]
+    public async Task GetContainerAddressAsync_returns_null_when_the_address_is_not_static(string net0)
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, $"{{\"data\":{{\"net0\":\"{net0}\"}}}}"));
+
+        Assert.Null(await service.GetContainerAddressAsync(141));
+    }
+
+    [Fact]
+    public async Task GetContainerAddressAsync_returns_null_when_the_container_has_no_net0()
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, """{"data":{}}"""));
+
+        Assert.Null(await service.GetContainerAddressAsync(141));
+    }
+
+    [Fact]
+    public async Task AddTagAsync_combines_the_new_tag_with_the_freshly_read_current_tags()
+    {
+        string? sentTags = null;
+        var service = BuildService(request =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return (HttpStatusCode.OK, """{"data":{"tags":"base;mqtt"}}""");
+            }
+
+            sentTags = request.Content!.ReadAsStringAsync().Result;
+            return (HttpStatusCode.OK, """{"data":null}""");
+        });
+
+        await service.AddTagAsync(141, "managed-by-orchestrator");
+
+        Assert.Contains("base", sentTags);
+        Assert.Contains("mqtt", sentTags);
+        Assert.Contains("managed-by-orchestrator", sentTags);
+    }
+
+    [Fact]
+    public async Task AddTagAsync_is_a_no_op_when_the_tag_is_already_present()
+    {
+        var putCalled = false;
+        var service = BuildService(request =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return (HttpStatusCode.OK, """{"data":{"tags":"base;managed-by-orchestrator"}}""");
+            }
+
+            putCalled = true;
+            return (HttpStatusCode.OK, """{"data":null}""");
+        });
+
+        await service.AddTagAsync(141, "managed-by-orchestrator");
+
+        Assert.False(putCalled);
+    }
 }
