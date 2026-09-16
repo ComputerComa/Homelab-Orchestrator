@@ -14,4 +14,7 @@ public interface IProxmoxService
 
     /// <summary>Creates the LXC container and waits for the Proxmox task to finish.</summary>
     Task<CreatedContainer> CreateContainerAsync(ContainerRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Every LXC container on the configured node, as Proxmox currently reports it.</summary>
+    Task<IReadOnlyList<ContainerSummary>> ListContainersAsync(CancellationToken cancellationToken = default);
 }

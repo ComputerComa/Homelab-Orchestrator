@@ -29,6 +29,12 @@ Ansible, which does not exist in this repository yet: waiting for SSH and applyi
   shown earlier is never trusted or reused;
 - watch the job's stage update live over HTMX polling until it succeeds or fails.
 
+Outside the web UI, two unauthenticated JSON endpoints generate a standard Ansible dynamic
+inventory for a single container or for every currently running one — see
+[Inventory API](#inventory-api-implemented). This is a first, narrow slice of the "discover
+hosts from Proxmox and generate inventory" capability Maintenance will eventually need; it does
+not run `ansible-playbook` itself.
+
 See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
 
 Maintenance, the playbook catalog, and execution history (Milestones 2-4) are design-only —
@@ -279,7 +285,37 @@ browser or is stored on a job record.
 
 ## Dynamic Ansible inventory
 
-There are two inventory paths.
+### Inventory API (implemented)
+
+The application exposes two read-only, unauthenticated JSON endpoints that generate a standard
+Ansible dynamic-inventory document (the same `_meta`/`hostvars` shape `ansible-inventory --list`
+and inventory scripts/plugins produce — see
+[SSH key management](#ssh-key-management) for where `ansible_user`/`ansible_port`/
+`ansible_ssh_private_key_file` come from):
+
+```text
+GET /api/inventory/containers/{vmid}   -> inventory containing just that one container
+GET /api/inventory/containers/running  -> inventory containing every currently running container
+```
+
+```bash
+curl http://localhost:5050/api/inventory/containers/141 > inventory.json
+ansible-playbook -i inventory.json some-playbook.yml
+
+curl http://localhost:5050/api/inventory/containers/running -o inventory.json
+ansible-playbook -i inventory.json some-playbook.yml --limit web-01
+```
+
+Both endpoints read live from Proxmox (`GET /nodes/{node}/lxc`) and derive each host's address
+from its VMID using the same convention provisioning uses — nothing is cached or read from a
+static file. `/containers/{vmid}` returns 404 for a VMID Proxmox doesn't know about and answers
+regardless of the container's power state; `/containers/running` silently excludes anything not
+currently running. Neither endpoint requires authentication yet — do not expose this port beyond
+a trusted network until [authentication](#milestones) is added.
+
+These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves. The
+two paths below describe how a playbook run is expected to actually get its inventory once the
+runner exists.
 
 For the initial `base` run, the application already knows the new address and can use an inline host list:
 

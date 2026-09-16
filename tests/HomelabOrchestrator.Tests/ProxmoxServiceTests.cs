@@ -135,4 +135,41 @@ public class ProxmoxServiceTests
         var ex = await Assert.ThrowsAsync<ProxmoxOperationException>(() => service.CreateContainerAsync(request));
         Assert.Contains("already exists", ex.Message);
     }
+
+    [Fact]
+    public async Task ListContainersAsync_translates_the_node_lxc_index_into_container_summaries()
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, """
+            {"data":[
+                {"vmid":141,"name":"web-01","status":"running"},
+                {"vmid":142,"name":"db-01","status":"stopped"}
+            ]}
+            """));
+
+        var containers = await service.ListContainersAsync();
+
+        Assert.Equal(2, containers.Count);
+        Assert.Equal(141, containers[0].Vmid);
+        Assert.Equal("web-01", containers[0].Hostname);
+        Assert.True(containers[0].IsRunning);
+        Assert.Equal(142, containers[1].Vmid);
+        Assert.Equal("db-01", containers[1].Hostname);
+        Assert.False(containers[1].IsRunning);
+    }
+
+    [Fact]
+    public async Task ListContainersAsync_returns_an_empty_list_when_there_are_no_containers()
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, """{"data":[]}"""));
+
+        Assert.Empty(await service.ListContainersAsync());
+    }
+
+    [Fact]
+    public async Task ListContainersAsync_translates_a_proxmox_error_into_a_sanitized_exception()
+    {
+        var service = BuildService(_ => (HttpStatusCode.InternalServerError, """{"data":null}"""));
+
+        await Assert.ThrowsAsync<ProxmoxOperationException>(() => service.ListContainersAsync());
+    }
 }

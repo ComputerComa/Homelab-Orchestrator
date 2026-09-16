@@ -75,6 +75,9 @@ public class ProvisioningWorkerTests
         public Task<string> FindLatestDebianTemplateAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult("local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst");
 
+        public Task<IReadOnlyList<ContainerSummary>> ListContainersAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ContainerSummary>>([]);
+
         public Task<CreatedContainer> CreateContainerAsync(ContainerRequest request, CancellationToken cancellationToken = default)
         {
             LastRequest = request;
