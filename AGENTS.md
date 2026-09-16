@@ -152,6 +152,18 @@ there is no SSH input anywhere in the web UI.
 
 The web playbook runner must only execute playbooks discovered beneath the configured approved catalog directory. Resolve and validate canonical paths to prevent traversal. Never expose a browser field for an arbitrary command or arbitrary filesystem path.
 
+The Ansible Runner page (`/Runner`, `Pages/Runner/`) implements this for `ansible/playbooks/`
+(top-level files only): `PlaybookCatalog` (`Services/Ansible/PlaybookCatalog.cs`) is the only
+component that lists playbooks and resolves a name to a path, and it only ever resolves a name
+to a path it just discovered itself — extend it rather than adding a second lookup if playbook
+discovery needs to change. Its run targets (a single running container, a Proxmox-tag group, or
+all running containers) are re-resolved against live Proxmox state inside `AnsibleRunWorker`
+immediately before building the `ansible-playbook` command — the same "never trust a stale
+browser value" rule as VMID/address/template — never inside the page model. Tag targets are
+translated to Ansible group names with `AnsibleGroupName`, which must keep matching Ansible's own
+`keyed_groups` sanitization (`[^A-Za-z0-9_]` -> `_`) so `--limit` matches the live inventory
+plugin's groups.
+
 ## Jobs and concurrency
 
 - HTTP requests enqueue work and return quickly.
@@ -216,6 +228,9 @@ Cancelled
 - Show the actual target host and operation before disruptive actions.
 - Keep provisioning fields minimal; infrastructure defaults belong in configuration.
 - Do not expose secret configuration values in forms.
+- The shared layout (`Pages/Shared/_Layout.cshtml`) carries a top navigation bar linking every
+  top-level page (currently Provision and Ansible Runner). Add new top-level pages there rather
+  than leaving them reachable only by typing a URL.
 
 ## Tests
 

@@ -10,7 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorPages(options =>
 {
-    // Provisioning is the only workflow today, so it is also the landing page.
+    // Provisioning is the primary workflow, so it is also the landing page.
     options.Conventions.AddPageRoute("/Provision/Index", "");
 });
 
@@ -27,6 +27,19 @@ builder.Services
     .Validate(o => !string.IsNullOrWhiteSpace(o.RemoteUser), "Ssh:RemoteUser is required.")
     .Validate(o => o.Port is > 0 and <= 65535, "Ssh:Port must be a valid TCP port.")
     .ValidateOnStart();
+
+builder.Services
+    .AddOptions<AnsibleOptions>()
+    .Bind(builder.Configuration.GetSection(AnsibleOptions.SectionName))
+    .PostConfigure(o =>
+    {
+        // Local dev layout: ansible/ is a sibling of src/ and tests/. Deployments with a
+        // different layout should set Ansible:RepositoryRoot explicitly.
+        if (string.IsNullOrWhiteSpace(o.RepositoryRoot))
+        {
+            o.RepositoryRoot = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "ansible"));
+        }
+    });
 
 // Proxmox service: the only thing that touches Corsinvest.ProxmoxVE.Api. Singleton so its
 // PveClient (and internal HttpClient) is built once and reused instead of per-call.
@@ -49,6 +62,15 @@ builder.Services.AddSingleton<IProvisioningService, ProvisioningService>();
 
 // Application service backing the read-only Ansible inventory endpoints.
 builder.Services.AddSingleton<IAnsibleInventoryService, AnsibleInventoryService>();
+
+// Ansible runner: playbook discovery, process execution, and the job queue/worker that
+// serializes runs — mirrors the provisioning job pattern above.
+builder.Services.AddSingleton<IPlaybookCatalog, PlaybookCatalog>();
+builder.Services.AddSingleton<IAnsibleProcessRunner, AnsibleProcessRunner>();
+builder.Services.AddSingleton<IAnsibleRunJobStore, InMemoryAnsibleRunJobStore>();
+builder.Services.AddSingleton<IAnsibleRunJobQueue, AnsibleRunJobQueue>();
+builder.Services.AddHostedService<AnsibleRunWorker>();
+builder.Services.AddSingleton<IAnsibleRunnerService, AnsibleRunnerService>();
 
 var app = builder.Build();
 

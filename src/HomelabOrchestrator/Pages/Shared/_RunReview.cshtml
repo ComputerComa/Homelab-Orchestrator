@@ -1,0 +1,45 @@
+@using HomelabOrchestrator.Services.Jobs
+@model RunFormModel
+
+@functions {
+    static string DescribeTarget(RunFormModel form)
+    {
+        var (kind, value) = form.ParseTarget();
+        return kind switch
+        {
+            AnsibleRunTargetKind.Vm => $"container \"{value}\"",
+            AnsibleRunTargetKind.TagGroup => $"containers tagged \"{value}\"",
+            _ => "all running containers",
+        };
+    }
+}
+
+<div class="card">
+    <h2>Run this playbook?</h2>
+
+    <dl class="fact-list">
+        <dt>Playbook</dt><dd>@Model.PlaybookName</dd>
+        <dt>Target</dt><dd>@DescribeTarget(Model)</dd>
+    </dl>
+
+    <form method="post"
+          hx-post
+          hx-page="Index"
+          hx-page-handler="Run"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#spinner"
+          hx-disabled-elt="find button[type='submit']">
+        @Html.AntiForgeryToken()
+
+        <input type="hidden" name="Form.PlaybookName" value="@Model.PlaybookName" />
+        <input type="hidden" name="Form.Target" value="@Model.Target" />
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Confirm &amp; run</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('result').innerHTML = ''">
+                Cancel
+            </button>
+        </div>
+    </form>
+</div>

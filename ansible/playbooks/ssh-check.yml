@@ -1,0 +1,13 @@
+---
+# A basic SSH connectivity check: connects to each target over SSH and reports whether it's
+# reachable. Safe to run against any container — it makes no changes.
+- name: Check SSH connectivity to the target container(s)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping over SSH
+      ansible.builtin.ping:
+
+    - name: Report connectivity result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ ansible_host }}) is reachable via SSH"

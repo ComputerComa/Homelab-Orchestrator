@@ -34,6 +34,29 @@ body {
     margin-top: 0.25rem;
 }
 
+.site-nav {
+    display: flex;
+    gap: 1.25rem;
+    margin-top: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.site-nav a {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 0.5rem 0.1rem;
+    border-bottom: 2px solid transparent;
+}
+
+.site-nav a:hover {
+    color: var(--text);
+}
+
+.site-nav a.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+}
+
 .container {
     max-width: 640px;
     margin: 0 auto;
@@ -92,6 +115,7 @@ body {
 }
 
 .field input,
+.field select,
 .field textarea {
     width: 100%;
     padding: 0.5rem 0.6rem;
@@ -179,6 +203,20 @@ body {
 
 .banner-error {
     border-color: var(--error);
+}
+
+.run-output {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    max-height: 24rem;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .htmx-indicator {
