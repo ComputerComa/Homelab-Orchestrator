@@ -32,6 +32,10 @@ builder.Services.AddSingleton<IProxmoxService, ProxmoxService>();
 
 // Reads workstation + orchestrator public keys from disk; never touches the private key.
 builder.Services.AddSingleton<ISshPublicKeyProvider, SshPublicKeyProvider>();
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5050);
+});
 
 // Job services: queueing, state, and the background worker that serializes provisioning.
 builder.Services.AddSingleton<IProvisioningJobStore, InMemoryProvisioningJobStore>();
