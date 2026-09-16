@@ -36,9 +36,29 @@ body {
 
 .site-nav {
     display: flex;
+    align-items: center;
     gap: 1.25rem;
     margin-top: 1rem;
     border-bottom: 1px solid var(--border);
+}
+
+.site-nav-logout {
+    margin-left: auto;
+}
+
+.link-button {
+    background: none;
+    border: none;
+    padding: 0.5rem 0.1rem;
+    font: inherit;
+    color: var(--muted);
+    text-decoration: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+}
+
+.link-button:hover {
+    color: var(--text);
 }
 
 .site-nav a {

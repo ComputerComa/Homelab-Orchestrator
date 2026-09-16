@@ -42,6 +42,11 @@ Do not change these without an explicit request:
   (`/root/.ssh/authorized_keys` and `/root/.ssh/id_ed25519.pub`), never from a browser field
   or a job record; never generate, rotate, or copy the orchestrator's private key
   automatically. See [SSH key management](#ssh-key-management).
+- Use EF Core with SQLite for both ASP.NET Core Identity's user store and, once implemented,
+  execution history — one `DbContext`, not a separate store per concern.
+- The app supports exactly one operator account, seeded once from config with no public
+  registration page. Do not build multi-user or role-based access control without an explicit
+  request. See [Authentication](#authentication).
 
 ## Boundaries
 
@@ -132,9 +137,10 @@ there is no SSH input anywhere in the web UI.
   writing a second inventory generator. It composes `IProxmoxService.ListContainersAsync` with
   the VMID-to-address convention and `SshOptions`, and is also exposed read-only at
   `GET /api/inventory/containers/{vmid}` and `GET /api/inventory/containers/running`
-  (`Endpoints/InventoryEndpoints.cs`) for external tooling. Those two endpoints are
-  unauthenticated; do not add a third without also covering it under
-  [authentication](#security) once that exists.
+  (`Endpoints/InventoryEndpoints.cs`) for external tooling. Those two endpoints don't require
+  sign-in; they're gated by the `LocalhostOnly` policy instead — see
+  [Authentication](#authentication). Apply that same policy to a third endpoint if it's ever
+  added for a same-machine-only use case; don't leave it open by default.
 - `ansible/inventory_plugins/homelab_orchestrator.py` consumes those same two endpoints from the
   Ansible side (enabled via `ansible/ansible.cfg`'s `enable_plugins`). Extend this plugin — don't
   add a second one — if another endpoint or hostvar needs to reach Ansible inventory.
@@ -163,6 +169,38 @@ browser value" rule as VMID/address/template — never inside the page model. Ta
 translated to Ansible group names with `AnsibleGroupName`, which must keep matching Ansible's own
 `keyed_groups` sanitization (`[^A-Za-z0-9_]` -> `_`) so `--limit` matches the live inventory
 plugin's groups.
+
+## Authentication
+
+The app supports exactly one operator account. There is no self-registration page and no
+multi-user/RBAC model — do not add either without an explicit request.
+
+- `Data/ApplicationDbContext.cs` (`IdentityDbContext<IdentityUser>`, EF Core + SQLite) backs
+  ASP.NET Core Identity's cookie-based sign-in. Migrations apply automatically at startup
+  (`Database.MigrateAsync()` in `Program.cs`); don't add a manual migration step to any
+  deployment doc.
+- `AdminOptions` (`Admin:Username`/`Admin:Password`) is read exactly once, in `Program.cs`,
+  immediately after migrating: if no account exists yet, one is created from those values; if any
+  account already exists, they're ignored. Never read `AdminOptions` anywhere else, and never make
+  that seeding step overwrite an existing account's password.
+- Razor Pages are protected by an `AuthorizeFolder("/")` convention with
+  `AllowAnonymousToPage("/Account/Login")` as the one exception. A new top-level page needs no
+  extra wiring to be protected — don't add a per-page `[Authorize]`/`[AllowAnonymous]` attribute
+  unless a page genuinely needs to deviate from that default.
+- `/Account/ChangePassword` is the only way to rotate the account's password; there's no
+  password-reset flow (no email, no second factor to reset through). Losing the password is an
+  operator-level database task, not something the app exposes.
+- `Authorization/LocalhostOnlyHandler.cs` (policy name `"LocalhostOnly"`) is a separate gate from
+  sign-in, for endpoints that should only ever be called from the orchestrator's own machine (the
+  Ansible inventory endpoints today). It checks the actual TCP `RemoteIpAddress`, not whether the
+  caller is authenticated — a signed-in browser calling from off-box must still be rejected, and
+  an anonymous local caller must still be allowed. Read `HttpContext` through
+  `IHttpContextAccessor`, never `AuthorizationHandlerContext.Resource` (endpoint-routing
+  authorization passes the matched `Endpoint` there, not the request, so relying on it would fail
+  closed for everyone including localhost). `Program.cs` also overrides
+  `OnRedirectToLogin`/`OnRedirectToAccessDenied` so a rejected `/api/...` call gets a plain `403`
+  instead of a redirect to the HTML login page — keep that in place for any future API-shaped
+  endpoint.
 
 ## Jobs and concurrency
 
@@ -196,7 +234,9 @@ Cancelled
 - Never return secrets in API responses, HTML, validation messages, or execution logs.
 - Never read, return, or log the orchestrator's private key (`Ssh:OrchestratorPrivateKeyPath`); only its public half is ever combined and sent to Proxmox.
 - Do not place secret values in process arguments when a protected file or environment variable is supported.
-- Apply authentication before treating the application as production-ready.
+- Every page requires a signed-in operator except `/Account/Login` — see [Authentication](#authentication).
+- Scope a same-machine-only endpoint to loopback with the `LocalhostOnly` policy; don't rely on
+  network placement (which address Kestrel binds) as the only protection.
 - Require explicit confirmation for destructive and disruptive actions.
 - Apply anti-forgery protection to state-changing browser requests.
 - Validate all submitted values server-side even when the browser validates them.
@@ -246,7 +286,8 @@ Add tests alongside meaningful behavior. Prioritize:
 - playbook-path allowlisting and traversal rejection;
 - Ansible argument construction;
 - secret redaction;
-- retry behavior after a post-creation Ansible failure.
+- retry behavior after a post-creation Ansible failure;
+- the `LocalhostOnly` authorization requirement, for both loopback and non-loopback addresses.
 
 Use test doubles at the `IProxmoxService`, Ansible runner, and process boundaries. Do not require a live Proxmox server for the ordinary test suite.
 

@@ -14,6 +14,12 @@
     <PackageReference Include="Htmx" Version="1.12.0" />
     <!-- Typed hx-page / hx-page-handler tag helpers, so HTMX urls are generated the same way asp-page urls are -->
     <PackageReference Include="Htmx.TagHelpers" Version="1.12.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
