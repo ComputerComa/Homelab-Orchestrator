@@ -130,10 +130,20 @@ public class ProxmoxService : IProxmoxService
             EnsureSuccess(result, "list containers");
 
             return result.ToEnumerable()
-                .Select(item => new ContainerSummary(
-                    Vmid: Convert.ToInt32((object)item.vmid),
-                    Hostname: (string?)item.name ?? "",
-                    Status: (string)item.status))
+                .Select(item =>
+                {
+                    // "tags" is genuinely optional — Proxmox omits the key for an untagged
+                    // container rather than sending an empty string, so a plain `item.tags`
+                    // dynamic access would throw. Look it up defensively instead.
+                    var fields = (IDictionary<string, object>)item;
+                    var tagsRaw = fields.TryGetValue("tags", out var value) ? value as string : null;
+
+                    return new ContainerSummary(
+                        Vmid: Convert.ToInt32((object)item.vmid),
+                        Hostname: (string?)item.name ?? "",
+                        Status: (string)item.status,
+                        Tags: ParseTags(tagsRaw));
+                })
                 .OrderBy(c => c.Vmid)
                 .ToList();
         }
@@ -142,6 +152,9 @@ public class ProxmoxService : IProxmoxService
             throw WrapUnexpected(ex, "list containers");
         }
     }
+
+    private static IReadOnlyList<string> ParseTags(string? tags) =>
+        (tags ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
     private ProxmoxOperationException WrapUnexpected(Exception ex, string action)
     {

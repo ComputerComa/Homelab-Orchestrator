@@ -30,10 +30,12 @@ Ansible, which does not exist in this repository yet: waiting for SSH and applyi
 - watch the job's stage update live over HTMX polling until it succeeds or fails.
 
 Outside the web UI, two unauthenticated JSON endpoints generate a standard Ansible dynamic
-inventory for a single container or for every currently running one — see
-[Inventory API](#inventory-api-implemented). This is a first, narrow slice of the "discover
-hosts from Proxmox and generate inventory" capability Maintenance will eventually need; it does
-not run `ansible-playbook` itself.
+inventory for a single container or for every currently running one, and a matching custom
+Ansible inventory plugin (`ansible/inventory_plugins/homelab_orchestrator.py`) lets
+`ansible-playbook`/`ansible-inventory` consume them directly — see
+[Inventory API](#inventory-api-implemented) and [Inventory plugin](#inventory-plugin-implemented).
+This is a first, narrow slice of the "discover hosts from Proxmox and generate inventory"
+capability Maintenance will eventually need; nothing here runs `ansible-playbook` automatically.
 
 See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
 
@@ -291,7 +293,10 @@ The application exposes two read-only, unauthenticated JSON endpoints that gener
 Ansible dynamic-inventory document (the same `_meta`/`hostvars` shape `ansible-inventory --list`
 and inventory scripts/plugins produce — see
 [SSH key management](#ssh-key-management) for where `ansible_user`/`ansible_port`/
-`ansible_ssh_private_key_file` come from):
+`ansible_ssh_private_key_file` come from). Each host's hostvars also include `tags`: Proxmox's
+own semicolon-separated tag string (e.g. `base;managed-by-orchestrator;mqtt`), split, trimmed,
+and returned as a JSON array — always present, empty (`[]`) rather than missing or `null` for an
+untagged container.
 
 ```text
 GET /api/inventory/containers/{vmid}   -> inventory containing just that one container
@@ -313,18 +318,53 @@ regardless of the container's power state; `/containers/running` silently exclud
 currently running. Neither endpoint requires authentication yet — do not expose this port beyond
 a trusted network until [authentication](#milestones) is added.
 
-These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves. The
-two paths below describe how a playbook run is expected to actually get its inventory once the
-runner exists.
+These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves — that
+remains a manual step until the runner (Milestone 1's remaining items) exists.
 
-For the initial `base` run, the application already knows the new address and can use an inline host list:
+### Inventory plugin (implemented)
+
+`ansible/inventory_plugins/homelab_orchestrator.py` is a custom Ansible inventory plugin that
+calls the two endpoints above directly, so `ansible-playbook`/`ansible-inventory` can use this
+application as their inventory source with no intermediate file:
+
+```yaml
+# ansible/inventory/orchestrator.yml — every running container, grouped by tag
+plugin: homelab_orchestrator
+api_url: http://localhost:5050
+mode: running
+keyed_groups:
+  - key: tags
+    prefix: tag
+```
+
+```yaml
+# ansible/inventory/orchestrator-single.yml — one container by VMID; the intended
+# post-provision inventory source for apply-base.yml
+plugin: homelab_orchestrator
+api_url: http://localhost:5050
+mode: vmid
+vmid: 141
+```
 
 ```bash
-ansible-playbook \
-  -i '10.0.150.102,' \
-  -u root \
-  ansible/playbooks/apply-base.yml
+cd ansible
+ansible-inventory -i inventory/orchestrator.yml --graph
+ansible-playbook -i inventory/orchestrator-single.yml playbooks/apply-base.yml
 ```
+
+`ansible/ansible.cfg` enables the plugin (`enable_plugins = homelab_orchestrator, auto, yaml,
+ini`) and points `roles_path` at `ansible/roles` so playbooks under `ansible/playbooks/` can find
+roles like `base`. The plugin supports the standard `compose`/`groups`/`keyed_groups`/`strict`
+options (via Ansible's `constructed` fragment — that's how `orchestrator.yml` above turns `tags`
+into `tag_base`/`tag_mqtt`/... groups) plus `validate_certs` and `timeout`. A parse failure —
+Proxmox unreachable, an unknown VMID (HTTP 404), or a malformed response — raises
+`AnsibleParserError` with a specific message; it never falls back to a silently empty inventory.
+
+For the initial `base` run right after provisioning, use `orchestrator-single.yml` as shown
+above (or, without the plugin, an inline host list works too:
+`ansible-playbook -i '10.0.150.102,' -u root ansible/playbooks/apply-base.yml`). `base` itself is
+currently a placeholder role (`ansible/roles/base/tasks/main.yml`) — it runs and does nothing
+until its real tasks are decided.
 
 For maintenance and catalog playbooks, the application should query Proxmox, filter eligible guests, and generate an inventory JSON document for that execution. Any temporary files must be written beneath:
 
@@ -388,13 +428,13 @@ dotnet test --no-build
 dotnet run --project src/HomelabOrchestrator
 ```
 
-Once the `ansible/` directory exists, validate its content with:
+Validate the Ansible content (run from `ansible/` so its `ansible.cfg` — inventory plugin and
+`roles_path` — is picked up):
 
 ```bash
-ansible-playbook \
-  --syntax-check \
-  -i 'localhost,' \
-  ansible/playbooks/apply-base.yml
+cd ansible
+ansible-playbook --syntax-check -i 'localhost,' playbooks/apply-base.yml
+ansible-inventory -i inventory/orchestrator.yml --list
 ```
 
 ## Milestones

@@ -135,6 +135,9 @@ there is no SSH input anywhere in the web UI.
   (`Endpoints/InventoryEndpoints.cs`) for external tooling. Those two endpoints are
   unauthenticated; do not add a third without also covering it under
   [authentication](#security) once that exists.
+- `ansible/inventory_plugins/homelab_orchestrator.py` consumes those same two endpoints from the
+  Ansible side (enabled via `ansible/ansible.cfg`'s `enable_plugins`). Extend this plugin — don't
+  add a second one — if another endpoint or hostvar needs to reach Ansible inventory.
 - Write temporary inventory and extra-vars files beneath `/run/homelab-orchestrator/<execution-id>/`.
 - Apply restrictive file permissions to execution directories and remove them after the configured retention period.
 - Invoke `ansible-playbook` directly with `ProcessStartInfo`.

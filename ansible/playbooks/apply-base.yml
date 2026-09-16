@@ -1,0 +1,9 @@
+---
+# Intended to run against a single freshly provisioned container, e.g.:
+#   ansible-playbook -i ansible/inventory/orchestrator-single.yml ansible/playbooks/apply-base.yml
+- name: Apply the base role to a newly provisioned container
+  hosts: all
+  become: false
+  gather_facts: true
+  roles:
+    - base

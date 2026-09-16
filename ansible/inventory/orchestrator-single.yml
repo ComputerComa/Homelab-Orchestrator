@@ -1,0 +1,9 @@
+---
+# One specific container by VMID — the intended inventory source for the post-provision
+# apply-base.yml run:
+#   ansible-playbook -i ansible/inventory/orchestrator-single.yml ansible/playbooks/apply-base.yml
+# Edit `vmid` (or use a per-run copy of this file) before each invocation.
+plugin: homelab_orchestrator
+api_url: http://localhost:5050
+mode: vmid
+vmid: 141

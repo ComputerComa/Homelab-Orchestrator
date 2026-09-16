@@ -29,8 +29,8 @@ public class AnsibleInventoryServiceTests
     public async Task GetContainerInventoryAsync_returns_an_inventory_with_just_that_host()
     {
         var service = BuildService([
-            new ContainerSummary(141, "web-01", "running"),
-            new ContainerSummary(142, "db-01", "stopped"),
+            new ContainerSummary(141, "web-01", "running", []),
+            new ContainerSummary(142, "db-01", "stopped", []),
         ]);
 
         var inventory = await service.GetContainerInventoryAsync(141);
@@ -43,7 +43,7 @@ public class AnsibleInventoryServiceTests
     [Fact]
     public async Task GetContainerInventoryAsync_returns_null_for_an_unknown_vmid()
     {
-        var service = BuildService([new ContainerSummary(141, "web-01", "running")]);
+        var service = BuildService([new ContainerSummary(141, "web-01", "running", [])]);
 
         Assert.Null(await service.GetContainerInventoryAsync(999));
     }
@@ -52,7 +52,7 @@ public class AnsibleInventoryServiceTests
     public async Task GetContainerInventoryAsync_includes_connection_details_from_ssh_options()
     {
         var service = BuildService(
-            [new ContainerSummary(141, "web-01", "running")],
+            [new ContainerSummary(141, "web-01", "running", [])],
             new SshOptions { RemoteUser = "root", Port = 2222, OrchestratorPrivateKeyPath = "/root/.ssh/id_ed25519" });
 
         var inventory = await service.GetContainerInventoryAsync(141);
@@ -64,9 +64,33 @@ public class AnsibleInventoryServiceTests
     }
 
     [Fact]
+    public async Task GetContainerInventoryAsync_includes_tags_when_the_container_has_several()
+    {
+        var service = BuildService([
+            new ContainerSummary(141, "web-01", "running", ["base", "managed-by-orchestrator", "mqtt"]),
+        ]);
+
+        var inventory = await service.GetContainerInventoryAsync(141);
+
+        Assert.Equal(["base", "managed-by-orchestrator", "mqtt"], inventory!.Meta.Hostvars["web-01"].Tags);
+    }
+
+    [Fact]
+    public async Task GetContainerInventoryAsync_produces_an_empty_tags_array_when_the_container_has_none()
+    {
+        var service = BuildService([new ContainerSummary(141, "web-01", "running", [])]);
+
+        var inventory = await service.GetContainerInventoryAsync(141);
+
+        var tags = inventory!.Meta.Hostvars["web-01"].Tags;
+        Assert.NotNull(tags);
+        Assert.Empty(tags);
+    }
+
+    [Fact]
     public async Task GetContainerInventoryAsync_throws_when_the_vmid_cannot_be_mapped_to_an_address()
     {
-        var service = BuildService([new ContainerSummary(1, "out-of-range", "running")]);
+        var service = BuildService([new ContainerSummary(1, "out-of-range", "running", [])]);
 
         await Assert.ThrowsAsync<ProxmoxOperationException>(() => service.GetContainerInventoryAsync(1));
     }
@@ -75,9 +99,9 @@ public class AnsibleInventoryServiceTests
     public async Task GetRunningContainersInventoryAsync_excludes_stopped_containers()
     {
         var service = BuildService([
-            new ContainerSummary(141, "web-01", "running"),
-            new ContainerSummary(142, "db-01", "stopped"),
-            new ContainerSummary(143, "cache-01", "running"),
+            new ContainerSummary(141, "web-01", "running", []),
+            new ContainerSummary(142, "db-01", "stopped", []),
+            new ContainerSummary(143, "cache-01", "running", []),
         ]);
 
         var inventory = await service.GetRunningContainersInventoryAsync();
@@ -89,7 +113,7 @@ public class AnsibleInventoryServiceTests
     [Fact]
     public async Task GetRunningContainersInventoryAsync_returns_an_empty_inventory_when_nothing_is_running()
     {
-        var service = BuildService([new ContainerSummary(141, "web-01", "stopped")]);
+        var service = BuildService([new ContainerSummary(141, "web-01", "stopped", [])]);
 
         var inventory = await service.GetRunningContainersInventoryAsync();
 
@@ -101,8 +125,8 @@ public class AnsibleInventoryServiceTests
     public async Task GetRunningContainersInventoryAsync_skips_unmappable_containers_instead_of_failing_the_whole_list()
     {
         var service = BuildService([
-            new ContainerSummary(1, "out-of-range", "running"),
-            new ContainerSummary(141, "web-01", "running"),
+            new ContainerSummary(1, "out-of-range", "running", []),
+            new ContainerSummary(141, "web-01", "running", []),
         ]);
 
         var inventory = await service.GetRunningContainersInventoryAsync();

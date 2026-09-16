@@ -172,4 +172,46 @@ public class ProxmoxServiceTests
 
         await Assert.ThrowsAsync<ProxmoxOperationException>(() => service.ListContainersAsync());
     }
+
+    [Fact]
+    public async Task ListContainersAsync_splits_the_semicolon_separated_tags_field_and_trims_each_entry()
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, """
+            {"data":[
+                {"vmid":141,"name":"web-01","status":"running","tags":"base; managed-by-orchestrator ;mqtt"}
+            ]}
+            """));
+
+        var containers = await service.ListContainersAsync();
+
+        Assert.Equal(["base", "managed-by-orchestrator", "mqtt"], containers[0].Tags);
+    }
+
+    [Fact]
+    public async Task ListContainersAsync_drops_empty_segments_produced_by_stray_or_doubled_semicolons()
+    {
+        var service = BuildService(_ => (HttpStatusCode.OK, """
+            {"data":[
+                {"vmid":141,"name":"web-01","status":"running","tags":";base;;mqtt; "}
+            ]}
+            """));
+
+        var containers = await service.ListContainersAsync();
+
+        Assert.Equal(["base", "mqtt"], containers[0].Tags);
+    }
+
+    [Fact]
+    public async Task ListContainersAsync_returns_an_empty_tags_array_when_proxmox_omits_the_tags_key()
+    {
+        // No "tags" key at all — this is how Proxmox represents an untagged container.
+        var service = BuildService(_ => (HttpStatusCode.OK, """
+            {"data":[{"vmid":141,"name":"web-01","status":"running"}]}
+            """));
+
+        var containers = await service.ListContainersAsync();
+
+        Assert.NotNull(containers[0].Tags);
+        Assert.Empty(containers[0].Tags);
+    }
 }

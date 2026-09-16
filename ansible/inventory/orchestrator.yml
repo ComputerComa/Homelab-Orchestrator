@@ -1,0 +1,10 @@
+---
+# Every container Proxmox currently reports as running, grouped by tag
+# (e.g. a container tagged "mqtt" lands in the "tag_mqtt" group).
+plugin: homelab_orchestrator
+api_url: http://localhost:5050
+mode: running
+
+keyed_groups:
+  - key: tags
+    prefix: tag
