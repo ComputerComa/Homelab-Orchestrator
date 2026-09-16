@@ -128,6 +128,13 @@ there is no SSH input anywhere in the web UI.
 - Do not store a list of managed hosts in Git.
 - For a newly provisioned host, use an inline inventory or an execution-scoped generated inventory.
 - For maintenance, discover hosts from Proxmox and generate inventory for the execution.
+  `IAnsibleInventoryService` (`Services/Ansible/`) already does this — reuse it rather than
+  writing a second inventory generator. It composes `IProxmoxService.ListContainersAsync` with
+  the VMID-to-address convention and `SshOptions`, and is also exposed read-only at
+  `GET /api/inventory/containers/{vmid}` and `GET /api/inventory/containers/running`
+  (`Endpoints/InventoryEndpoints.cs`) for external tooling. Those two endpoints are
+  unauthenticated; do not add a third without also covering it under
+  [authentication](#security) once that exists.
 - Write temporary inventory and extra-vars files beneath `/run/homelab-orchestrator/<execution-id>/`.
 - Apply restrictive file permissions to execution directories and remove them after the configured retention period.
 - Invoke `ansible-playbook` directly with `ProcessStartInfo`.

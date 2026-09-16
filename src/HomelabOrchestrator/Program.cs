@@ -1,4 +1,6 @@
+using HomelabOrchestrator.Endpoints;
 using HomelabOrchestrator.Options;
+using HomelabOrchestrator.Services.Ansible;
 using HomelabOrchestrator.Services.Jobs;
 using HomelabOrchestrator.Services.Provisioning;
 using HomelabOrchestrator.Services.Proxmox;
@@ -45,6 +47,9 @@ builder.Services.AddHostedService<ProvisioningWorker>();
 // Application service: the boundary Razor Pages call into instead of Proxmox/job internals directly.
 builder.Services.AddSingleton<IProvisioningService, ProvisioningService>();
 
+// Application service backing the read-only Ansible inventory endpoints.
+builder.Services.AddSingleton<IAnsibleInventoryService, AnsibleInventoryService>();
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
@@ -58,5 +63,6 @@ app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthorization();
 app.MapRazorPages();
+app.MapInventoryEndpoints();
 
 app.Run();

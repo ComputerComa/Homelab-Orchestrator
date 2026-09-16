@@ -122,6 +122,27 @@ public class ProxmoxService : IProxmoxService
         }
     }
 
+    public async Task<IReadOnlyList<ContainerSummary>> ListContainersAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _client.Value.Nodes[_options.Node].Lxc.Vmlist();
+            EnsureSuccess(result, "list containers");
+
+            return result.ToEnumerable()
+                .Select(item => new ContainerSummary(
+                    Vmid: Convert.ToInt32((object)item.vmid),
+                    Hostname: (string?)item.name ?? "",
+                    Status: (string)item.status))
+                .OrderBy(c => c.Vmid)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is not ProxmoxOperationException)
+        {
+            throw WrapUnexpected(ex, "list containers");
+        }
+    }
+
     private ProxmoxOperationException WrapUnexpected(Exception ex, string action)
     {
         _logger.LogError(ex, "Unexpected error trying to {Action}", action);
