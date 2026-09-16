@@ -51,6 +51,22 @@ public class AnsibleRunWorkerTests
     }
 
     [Fact]
+    public async Task Vm_target_fails_without_running_the_process_when_the_container_is_the_orchestrators_own()
+    {
+        var containers = new List<ContainerSummary>(RunningContainers)
+        {
+            new(150, Environment.MachineName, "running", []),
+        };
+        var (worker, store, queue, process) = Build(containers, exitCode: 0);
+
+        var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Vm, Environment.MachineName));
+
+        Assert.Equal(AnsibleRunStage.Failed, job.Stage);
+        Assert.Contains("not currently running", job.Error);
+        Assert.False(process.WasInvoked);
+    }
+
+    [Fact]
     public async Task TagGroup_target_resolves_to_the_sanitized_group_name()
     {
         var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0);

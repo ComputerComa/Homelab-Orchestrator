@@ -168,6 +168,15 @@ there is no SSH input anywhere in the web UI.
   don't require sign-in; they're gated by the `LocalhostOnly` policy instead — see
   [Authentication](#authentication). Apply that same policy to a third endpoint if it's ever
   added for a same-machine-only use case; don't leave it open by default.
+- The orchestrator usually runs as an LXC on the same Proxmox node it manages, so it appears in
+  `IProxmoxService.ListContainersAsync()` like any other guest. `OrchestratorSelfFilter.IsSelf`
+  (`Services/Ansible/`, matches a container's Proxmox hostname against `Environment.MachineName`)
+  excludes it from every "running containers" collection used for Ansible targeting: the
+  running-containers inventory endpoint, the Runner page's target list, and the worker's
+  vm/tag-group validation immediately before a run. Apply this filter at every new call site that
+  builds a "give me all running containers to target" list — otherwise a playbook run against
+  "all" (or a tag the orchestrator happens to share) will try to connect back to itself. It does
+  not apply to an explicit single-VMID inventory lookup; that stays a deliberate, honored request.
 - `ansible/inventory_plugins/homelab_orchestrator.py` consumes those same two endpoints from the
   Ansible side (enabled via `ansible/ansible.cfg`'s `enable_plugins`). Extend this plugin — don't
   add a second one — if another endpoint or hostvar needs to reach Ansible inventory.
@@ -316,7 +325,8 @@ Add tests alongside meaningful behavior. Prioritize:
 - retry behavior after a post-creation Ansible failure;
 - the `LocalhostOnly` authorization requirement, for both loopback and non-loopback addresses;
 - reconciliation eligibility (matching/mismatched/DHCP address, already-tagged, out-of-range VMID) and that adoption re-verifies before tagging instead of trusting the caller's selection;
-- inventory generation reporting a container's actual address even when it differs from what the VMID convention would predict.
+- inventory generation reporting a container's actual address even when it differs from what the VMID convention would predict;
+- `OrchestratorSelfFilter` excluding the orchestrator's own container from every running-containers/target list it feeds.
 
 Use test doubles at the `IProxmoxService`, Ansible runner, and process boundaries. Do not require a live Proxmox server for the ordinary test suite.
 

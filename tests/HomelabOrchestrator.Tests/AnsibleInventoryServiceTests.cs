@@ -111,6 +111,25 @@ public class AnsibleInventoryServiceTests
     }
 
     [Fact]
+    public async Task GetRunningContainersInventoryAsync_excludes_the_orchestrators_own_container()
+    {
+        // The orchestrator typically runs as an LXC on the same node it manages, so without this
+        // exclusion it would show up in "every running container" and every playbook — including
+        // the SSH connectivity check — would try to connect back to itself.
+        var service = BuildService(
+            [
+                new ContainerSummary(100, Environment.MachineName, "running", []),
+                new ContainerSummary(141, "web-01", "running", []),
+            ],
+            new Dictionary<int, string?> { [100] = "10.0.150.100", [141] = "10.0.150.141" });
+
+        var inventory = await service.GetRunningContainersInventoryAsync();
+
+        Assert.Equal(["web-01"], inventory.All.Hosts);
+        Assert.DoesNotContain(Environment.MachineName, inventory.Meta.Hostvars.Keys);
+    }
+
+    [Fact]
     public async Task GetRunningContainersInventoryAsync_excludes_stopped_containers()
     {
         var service = BuildService(
