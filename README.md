@@ -21,7 +21,9 @@ Ansible, which does not exist in this repository yet: waiting for SSH and applyi
 
 - see the next available VMID, the address it maps to, and the newest Debian 13 template,
   refreshed on demand;
-- submit a hostname and sizing, review a summary, and confirm;
+- submit a hostname and sizing, review a summary, and confirm — there is no SSH key field;
+  containers trust the orchestrator's own combined public keys (see
+  [SSH key management](#ssh-key-management));
 - have the request queued and executed by a background worker that recalculates the
   VMID/address/template itself immediately before creating anything — the browser preview
   shown earlier is never trusted or reused;
@@ -53,7 +55,8 @@ The server determines:
 - the IP address;
 - node, storage, bridge, subnet, gateway, and DNS configuration;
 - the newest available Debian 13 template;
-- SSH key;
+- the SSH public keys to trust, combined from the orchestrator's own filesystem — never
+  entered by the operator (see [SSH key management](#ssh-key-management));
 - required Proxmox features and tags.
 
 A provisioning job should expose each stage independently so a failed Ansible run can be retried without recreating the LXC.
@@ -227,8 +230,14 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
     "NetworkPrefix": "10.0.150",
     "Subnet": 16,
     "NameServers": ["10.0.200.1", "10.0.200.2"],
-    "SshPublicKeyPath": "/var/lib/homelab-orchestrator/id_ed25519.pub",
     "ValidateCertificate": false
+  },
+  "Ssh": {
+    "AuthorizedKeysPath": "/root/.ssh/authorized_keys",
+    "OrchestratorPublicKeyPath": "/root/.ssh/id_ed25519.pub",
+    "OrchestratorPrivateKeyPath": "/root/.ssh/id_ed25519",
+    "RemoteUser": "root",
+    "Port": 22
   }
 }
 ```
@@ -240,6 +249,33 @@ export Proxmox__ApiToken='automation@pve!homelab-orchestrator=TOKEN_SECRET'
 ```
 
 Never commit real tokens, passwords, private SSH keys, generated inventory, or playbook extra-variable files.
+
+## SSH key management
+
+The orchestrator runs as root inside its own LXC, and provisioning uses that root account's own
+SSH material — there is no SSH field anywhere in the web UI, and no key ever passes through the
+browser or is stored on a job record.
+
+- **Workstation keys** (yours and anyone else who should be able to log into new containers) go
+  in `/root/.ssh/authorized_keys` on the orchestrator, one public key per line — exactly like any
+  other machine's `authorized_keys`.
+- **The orchestrator's own keypair** is generated once, on the orchestrator itself:
+
+  ```bash
+  ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N '' -C 'homelab-orchestrator'
+  ```
+
+  This is not automated: the application never generates, rotates, or copies this keypair itself.
+  The public half (`/root/.ssh/id_ed25519.pub`) is combined with the workstation keys and copied
+  into every new container. The private half (`/root/.ssh/id_ed25519`) never leaves the
+  orchestrator — it is reserved for the future Ansible runner to connect back to containers as
+  `Ssh:RemoteUser` (`root` by default) on `Ssh:Port` (`22` by default), and nothing in provisioning
+  today reads it.
+- Only the **combined public keys** — deduplicated, deterministic, newline-delimited — are sent to
+  Proxmox's `ssh_public_keys` field when a container is created.
+- Editing either source file only affects **containers created afterward**. Existing containers
+  keep whatever keys they were built with; update `authorized_keys` on a running container the
+  same way you would on any other Linux host.
 
 ## Dynamic Ansible inventory
 
@@ -301,6 +337,9 @@ Requirements:
 - .NET 10 SDK
 - network access to the Proxmox API
 - a least-privilege Proxmox API token
+- an orchestrator SSH keypair at `/root/.ssh/id_ed25519(.pub)` and workstation keys in
+  `/root/.ssh/authorized_keys` (see [SSH key management](#ssh-key-management)) — provisioning
+  runs without them, but new containers will have no key-based SSH access until they exist
 - Ansible Core, SSH access to provisioned containers — only once Ansible integration
   (Milestone 1's remaining items) is implemented; not required to run what exists today
 
@@ -372,6 +411,8 @@ The last three items need Ansible integration, which is a separate, larger piece
 - Never accept arbitrary shell commands from the browser.
 - Never accept arbitrary playbook paths from the browser.
 - Recalculate VMID and IP immediately before creation; do not trust a stale browser preview.
+- Never accept an SSH key from the browser; source public keys only from the orchestrator's own
+  filesystem, and never generate, rotate, or copy the orchestrator's private key automatically.
 - Prefer idempotent Ansible roles and playbooks.
 - Preserve a created LXC when a later configuration stage fails, and make that stage retryable.
 

@@ -34,7 +34,4 @@ public class ProxmoxOptions
     public int DefaultMemoryMB { get; set; } = 2048;
     public int DefaultSwapMB { get; set; } = 512;
     public int DefaultDiskGB { get; set; } = 8;
-
-    /// <summary>Path to the public key file read to pre-fill (and, if the operator leaves it untouched, supply) the SSH key.</summary>
-    public string? SshPublicKeyPath { get; set; }
 }

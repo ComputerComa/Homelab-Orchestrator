@@ -13,7 +13,11 @@ namespace HomelabOrchestrator.Pages.Provision;
 /// HTTP binding, validation, and view models only — every actual Proxmox call and the
 /// long-running creation itself happen behind <see cref="IProvisioningService"/>.
 /// </summary>
-public class IndexModel(IProvisioningService provisioning, IOptions<ProxmoxOptions> options, ILogger<IndexModel> logger) : PageModel
+public class IndexModel(
+    IProvisioningService provisioning,
+    IOptions<ProxmoxOptions> options,
+    IOptions<SshOptions> sshOptions,
+    ILogger<IndexModel> logger) : PageModel
 {
     private readonly ProxmoxOptions _options = options.Value;
 
@@ -22,12 +26,15 @@ public class IndexModel(IProvisioningService provisioning, IOptions<ProxmoxOptio
 
     public ClusterPlacement Placement { get; set; } = new();
 
+    /// <summary>Display only — the actual keys are read fresh by the worker at creation time.</summary>
+    public string AuthorizedKeysPath => sshOptions.Value.AuthorizedKeysPath;
+
     public async Task<IActionResult> OnGetAsync(CancellationToken cancellationToken)
     {
         try
         {
             Placement = await provisioning.GetPlacementPreviewAsync(cancellationToken);
-            Form = ContainerFormModel.FromDefaults(_options, Placement, ReadDefaultSshKey());
+            Form = ContainerFormModel.FromDefaults(_options, Placement);
             return Page();
         }
         catch (ProxmoxOperationException ex)
@@ -93,25 +100,6 @@ public class IndexModel(IProvisioningService provisioning, IOptions<ProxmoxOptio
         if (!HostnamePolicy.IsValid(Form.Hostname))
         {
             ModelState.AddModelError(nameof(Form.Hostname), "Use lowercase letters, numbers, and hyphens.");
-        }
-    }
-
-    private string ReadDefaultSshKey()
-    {
-        var path = _options.SshPublicKeyPath;
-        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
-        {
-            return "";
-        }
-
-        try
-        {
-            return System.IO.File.ReadAllText(path).Trim();
-        }
-        catch (IOException ex)
-        {
-            logger.LogWarning(ex, "Could not read default SSH key at {Path}", path);
-            return "";
         }
     }
 }
