@@ -29,19 +29,22 @@ Ansible, which does not exist in this repository yet: waiting for SSH and applyi
   shown earlier is never trusted or reused;
 - watch the job's stage update live over HTMX polling until it succeeds or fails.
 
-Outside the web UI, two unauthenticated JSON endpoints generate a standard Ansible dynamic
-inventory for a single container or for every currently running one, and a matching custom
-Ansible inventory plugin (`ansible/inventory_plugins/homelab_orchestrator.py`) lets
-`ansible-playbook`/`ansible-inventory` consume them directly — see
-[Inventory API](#inventory-api-implemented) and [Inventory plugin](#inventory-plugin-implemented).
-This is a first, narrow slice of the "discover hosts from Proxmox and generate inventory"
-capability Maintenance will eventually need.
+Outside the web UI, two JSON endpoints generate a standard Ansible dynamic inventory for a single
+container or for every currently running one, and a matching custom Ansible inventory plugin
+(`ansible/inventory_plugins/homelab_orchestrator.py`) lets `ansible-playbook`/`ansible-inventory`
+consume them directly — see [Inventory API](#inventory-api-implemented) and
+[Inventory plugin](#inventory-plugin-implemented). This is a first, narrow slice of the "discover
+hosts from Proxmox and generate inventory" capability Maintenance will eventually need.
 
 A second page, the [Ansible Runner](#ansible-runner-implemented), does run `ansible-playbook`:
 an operator picks one of the playbooks committed under `ansible/playbooks/` and a target — a
 specific running container, every running container currently carrying a given Proxmox tag, or
 every running container — and a background worker runs it, streaming the captured output back
 to the page. A top navigation bar (Provision / Ansible Runner) switches between the two pages.
+
+The whole web UI requires signing in as the single seeded operator account, and the two
+inventory endpoints above are restricted to loopback callers — see
+[Authentication](#authentication-implemented) for both.
 
 See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
 
@@ -168,9 +171,13 @@ homelab-orchestrator/
 |-- HomelabOrchestrator.sln
 |-- src/
 |   `-- HomelabOrchestrator/
+|       |-- Authorization/
+|       |-- Data/
+|       |   `-- Migrations/
 |       |-- Models/
 |       |-- Options/
 |       |-- Pages/
+|       |   |-- Account/
 |       |   |-- Provision/
 |       |   |-- Runner/
 |       |   |-- Maintenance/
@@ -262,6 +269,13 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
     "ExecutablePath": "ansible-playbook",
     "InventoryFile": "inventory/orchestrator.yml",
     "TimeoutSeconds": 600
+  },
+  "ConnectionStrings": {
+    "Default": ""
+  },
+  "Admin": {
+    "Username": "",
+    "Password": ""
   }
 }
 ```
@@ -269,6 +283,12 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
 `Ansible:RepositoryRoot` left blank (the default) resolves to the `ansible/` directory that ships
 alongside `src/` and `tests/` in this repository; set it explicitly if a deployment lays out
 files differently. `Ansible:InventoryFile` is resolved relative to `RepositoryRoot`.
+
+`ConnectionStrings:Default` left blank resolves to a `homelab-orchestrator.db` SQLite file next to
+the application binary; set it explicitly to store the database elsewhere. `Admin:Username` and
+`Admin:Password` seed the single operator account the very first time the app starts with no
+account yet in the database — see [Authentication](#authentication-implemented) — and are ignored
+on every later boot, so it's safe to leave them in configuration or blank them out again.
 
 Supply the Proxmox token through secrets or the process environment:
 
@@ -335,8 +355,10 @@ Both endpoints read live from Proxmox (`GET /nodes/{node}/lxc`) and derive each 
 from its VMID using the same convention provisioning uses — nothing is cached or read from a
 static file. `/containers/{vmid}` returns 404 for a VMID Proxmox doesn't know about and answers
 regardless of the container's power state; `/containers/running` silently excludes anything not
-currently running. Neither endpoint requires authentication yet — do not expose this port beyond
-a trusted network until [authentication](#milestones) is added.
+currently running. Neither endpoint requires signing in — instead, both are restricted to
+loopback callers only (see [Authentication](#authentication-implemented)), since
+`ansible-playbook` running on the orchestrator itself is the only thing that ever needs to call
+them.
 
 These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves — that
 remains a manual step until the runner (Milestone 1's remaining items) exists.
@@ -434,6 +456,37 @@ free-text command or path ever accepted from the browser:
   playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
   container is reachable over SSH before running anything else against it; it makes no changes.
 
+## Authentication (implemented)
+
+Provisioning, and now the Ansible Runner, can create containers and run playbooks against real
+infrastructure, so the whole web UI requires signing in — there is deliberately no public
+registration page, since this app is built for exactly one operator:
+
+- **Every page requires a signed-in session** except `/Account/Login` — enforced by an
+  `AuthorizeFolder("/")` Razor Pages convention in `Program.cs`, so a new top-level page is
+  auth-gated automatically and never needs to opt in by hand.
+- **Sign-in is backed by ASP.NET Core Identity** (`Microsoft.AspNetCore.Identity`) with a cookie
+  scheme, and Identity's user store lives in SQLite via EF Core (`Data/ApplicationDbContext.cs`).
+  Pending migrations are applied automatically at startup (`Database.MigrateAsync()` in
+  `Program.cs`) — nothing manual is required to get the schema in place on first run.
+- **The single operator account is seeded once, on first boot, from config** — `Admin:Username`
+  and `Admin:Password` (see [Configuration](#configuration)) — and never touched again after that:
+  once any account exists, those values are ignored on every later boot. There's no way to create
+  a second account through the UI; if you need to reset a lost password, that's an operator task
+  against the database, not something the app exposes.
+- **Change your password** from the "Change password" link in the header once signed in
+  (`/Account/ChangePassword`) — the seeded config password is meant to be rotated after first
+  login, not used indefinitely.
+- **The two `/api/inventory/...` endpoints are gated differently**: a `LocalhostOnly`
+  authorization policy (`Authorization/LocalhostOnlyHandler.cs`) checks the request's actual TCP
+  remote address and only allows loopback (`127.0.0.1`/`::1`) through, regardless of whether the
+  caller is signed in. `ansible-playbook`, via the `homelab_orchestrator` inventory plugin, always
+  runs on the orchestrator's own machine and calls `http://localhost:5050` — it never needs (and
+  never gets) a login cookie. A rejected call gets a plain `403`, not a redirect to the login page.
+- **The rest of the app still listens on `0.0.0.0`** — Kestrel isn't restricted to loopback, only
+  those two specific endpoints are, via the policy above, independent of what address Kestrel is
+  bound to.
+
 ## Playbook catalog
 
 Approved one-off playbooks live under `ansible/playbooks/catalog`. A playbook may have a sidecar metadata document describing the UI form:
@@ -490,6 +543,16 @@ dotnet test --no-build
 dotnet run --project src/HomelabOrchestrator
 ```
 
+The database schema (Identity's tables today) is created and upgraded automatically at startup —
+nothing manual is required to run the app. Only creating a *new* migration after changing
+`Data/ApplicationDbContext.cs` needs the EF Core tooling, pinned in this repo's local tool
+manifest:
+
+```bash
+dotnet tool restore
+dotnet tool run dotnet-ef migrations add <Name> --project src/HomelabOrchestrator --output-dir Data/Migrations
+```
+
 Validate the Ansible content (run from `ansible/` so its `ansible.cfg` — inventory plugin and
 `roles_path` — is picked up):
 
@@ -535,7 +598,9 @@ The last three items need Ansible integration, which is a separate, larger piece
 ### Milestone 4: Operations hardening
 
 - [ ] Persist execution history in SQLite.
-- [ ] Add authentication and authorization.
+- [x] Add authentication and authorization — see [Authentication](#authentication-implemented).
+      Scoped to a single seeded operator account with no self-registration; a multi-user/RBAC
+      model was deliberately not built, since this app is meant for one operator.
 - [ ] Add cancellation and safe retry behavior.
 - [ ] Add retention rules for execution output.
 - [ ] Package as a native systemd service.
@@ -551,6 +616,11 @@ The last three items need Ansible integration, which is a separate, larger piece
 - Recalculate VMID and IP immediately before creation; do not trust a stale browser preview.
 - Never accept an SSH key from the browser; source public keys only from the orchestrator's own
   filesystem, and never generate, rotate, or copy the orchestrator's private key automatically.
+- Require sign-in for every page except the login page itself; never add a new top-level page
+  that opts out of that convention.
+- Scope any endpoint meant only for same-machine callers (like the Ansible inventory API) to
+  loopback via the `LocalhostOnly` authorization policy, rather than assuming network placement
+  will keep it safe.
 - Prefer idempotent Ansible roles and playbooks.
 - Preserve a created LXC when a later configuration stage fails, and make that stage retryable.
 

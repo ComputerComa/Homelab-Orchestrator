@@ -48,6 +48,13 @@ public class AnsibleProcessRunner(IOptions<AnsibleOptions> options, ILogger<Ansi
         startInfo.Environment["ANSIBLE_FORCE_COLOR"] = "0";
         startInfo.Environment["ANSIBLE_NOCOLOR"] = "1";
 
+        // Ansible (via Python) refuses to start if the inherited LANG/LC_ALL names a locale that
+        // isn't generated on this host — common when the server runs under a minimal service
+        // environment. C.UTF-8 ships with glibc and needs no locale-gen step, so pin it explicitly
+        // rather than depending on whatever locale the hosting process happened to inherit.
+        startInfo.Environment["LC_ALL"] = "C.UTF-8";
+        startInfo.Environment["LANG"] = "C.UTF-8";
+
         using var process = new Process { StartInfo = startInfo };
 
         void Capture(string? line)

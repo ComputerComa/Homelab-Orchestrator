@@ -11,7 +11,9 @@ public static class InventoryEndpoints
 {
     public static IEndpointRouteBuilder MapInventoryEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/inventory");
+        // ansible-playbook (via the homelab_orchestrator inventory plugin) is the only caller,
+        // and it always runs on this same machine — never reachable from the network.
+        var group = app.MapGroup("/api/inventory").RequireAuthorization("LocalhostOnly");
 
         group.MapGet("/containers/running", GetRunningContainersAsync);
         group.MapGet("/containers/{vmid:int}", GetContainerAsync);

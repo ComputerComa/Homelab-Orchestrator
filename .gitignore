@@ -5,6 +5,9 @@ obj/
 .vscode/
 appsettings.*.local.json
 appsettings.json
+*.db
+*.db-shm
+*.db-wal
 
 # Ansible
 __pycache__/

@@ -1,0 +1,31 @@
+@page
+@model LoginModel
+
+<h2>Sign in</h2>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="banner banner-error">
+        <p>@Model.ErrorMessage</p>
+    </div>
+}
+
+<form method="post" class="card">
+    @Html.AntiForgeryToken()
+
+    <div class="field">
+        <label asp-for="Form.Username">Username</label>
+        <input asp-for="Form.Username" autofocus autocomplete="username" />
+        <span asp-validation-for="Form.Username" class="field-error"></span>
+    </div>
+
+    <div class="field">
+        <label asp-for="Form.Password">Password</label>
+        <input asp-for="Form.Password" type="password" autocomplete="current-password" />
+        <span asp-validation-for="Form.Password" class="field-error"></span>
+    </div>
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">Sign in</button>
+    </div>
+</form>
