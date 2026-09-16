@@ -92,7 +92,9 @@ public class AnsibleRunWorker(
             return null;
         }
 
-        var running = (await proxmox.ListContainersAsync(cancellationToken)).Where(c => c.IsRunning).ToList();
+        var running = (await proxmox.ListContainersAsync(cancellationToken))
+            .Where(c => c.IsRunning && !OrchestratorSelfFilter.IsSelf(c))
+            .ToList();
 
         if (request.TargetKind == AnsibleRunTargetKind.Vm)
         {

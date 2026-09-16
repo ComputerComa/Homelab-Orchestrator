@@ -52,6 +52,15 @@ public class AnsibleInventoryService(
 
         foreach (var container in containers.Where(c => c.IsRunning))
         {
+            if (OrchestratorSelfFilter.IsSelf(container))
+            {
+                // The orchestrator's own container — never a valid Ansible target for a blanket
+                // "every running container" sweep. An explicit GetContainerInventoryAsync(vmid)
+                // lookup by its exact VMID is still honored; only this "give me everything" path
+                // excludes it.
+                continue;
+            }
+
             var hostEntry = await TryBuildHostEntryAsync(container, cancellationToken);
             if (hostEntry is null)
             {

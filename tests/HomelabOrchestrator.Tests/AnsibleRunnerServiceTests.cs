@@ -24,6 +24,21 @@ public class AnsibleRunnerServiceTests
     }
 
     [Fact]
+    public async Task GetRunTargetOptionsAsync_excludes_the_orchestrators_own_container_and_its_only_tag()
+    {
+        var proxmox = new FakeProxmoxService([
+            new ContainerSummary(100, Environment.MachineName, "running", ["orchestrator-only-tag"]),
+            new ContainerSummary(141, "web-01", "running", ["base"]),
+        ]);
+        var service = new AnsibleRunnerService(new FakeCatalog([]), proxmox, new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue());
+
+        var targets = await service.GetRunTargetOptionsAsync();
+
+        Assert.Equal(["web-01"], targets.RunningHostnames);
+        Assert.Equal(["base"], targets.Tags);
+    }
+
+    [Fact]
     public async Task SubmitAsync_enqueues_the_job_and_GetJob_returns_it()
     {
         var store = new InMemoryAnsibleRunJobStore();

@@ -15,7 +15,9 @@ public class AnsibleRunnerService(
 
     public async Task<RunTargetOptions> GetRunTargetOptionsAsync(CancellationToken cancellationToken = default)
     {
-        var running = (await proxmox.ListContainersAsync(cancellationToken)).Where(c => c.IsRunning).ToList();
+        var running = (await proxmox.ListContainersAsync(cancellationToken))
+            .Where(c => c.IsRunning && !OrchestratorSelfFilter.IsSelf(c))
+            .ToList();
 
         var hostnames = running
             .Select(c => c.Hostname)

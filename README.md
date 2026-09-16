@@ -369,9 +369,15 @@ container with no static address (DHCP/manual, or no `net0` at all) is excluded 
 `/containers/running` (with a logged warning) and makes `/containers/{vmid}` fail with a clear
 error rather than inventing an address for it. `/containers/{vmid}` returns 404 for a VMID
 Proxmox doesn't know about and answers regardless of the container's power state;
-`/containers/running` silently excludes anything not currently running. Neither endpoint requires
-signing in — instead, both are restricted to loopback callers only (see
-[Authentication](#authentication-implemented)), since `ansible-playbook` running on the
+`/containers/running` silently excludes anything not currently running — and also excludes the
+orchestrator's own container (`OrchestratorSelfFilter`, matched by comparing each container's
+Proxmox hostname against `Environment.MachineName`). The orchestrator usually runs as an LXC on
+the same node it manages, so without this exclusion it would show up in "every running
+container," and any playbook run against all of them — including the SSH connectivity check —
+would end up trying to connect back to itself. An explicit `/containers/{vmid}` lookup by the
+orchestrator's own VMID is not affected by this; only the "give me everything" listing excludes
+it. Neither endpoint requires signing in — instead, both are restricted to loopback callers only
+(see [Authentication](#authentication-implemented)), since `ansible-playbook` running on the
 orchestrator itself is the only thing that ever needs to call
 them.
 
@@ -445,9 +451,18 @@ free-text command or path ever accepted from the browser:
   a plain listing, not the metadata-driven catalog with per-playbook input forms described under
   [Playbook catalog](#playbook-catalog) below — every playbook here runs with no extra variables.
 - **Targets** are one of:
-  - a specific container, chosen by hostname, from every *currently running* container;
-  - a tag group — every currently running container carrying a given Proxmox tag;
-  - all currently running containers (no `--limit` at all).
+  - a specific container, chosen by hostname, from every *currently running* container
+    (excluding the orchestrator's own container — see below);
+  - a tag group — every currently running container carrying a given Proxmox tag, again
+    excluding the orchestrator's own;
+  - all currently running containers except the orchestrator's own (no `--limit` at all).
+
+  Every "running containers" listing this page and its worker use — the target dropdown's
+  options, target validation immediately before a run, and the underlying inventory "All"
+  resolves against — excludes the orchestrator's own container (`OrchestratorSelfFilter`). It
+  typically runs as an LXC on the same node it manages, so without this exclusion it would be
+  offered (and, for "All", silently included) as a target for every playbook, including the SSH
+  connectivity check trying to connect back to itself.
 
   Rather than one flat dropdown mixing containers and tags together, "Specific container" and
   "Tag group" are separate, individually collapsible `<details>` sections (plain HTML, no
