@@ -22,6 +22,11 @@ builder.Services
 // PveClient (and internal HttpClient) is built once and reused instead of per-call.
 builder.Services.AddSingleton<IProxmoxService, ProxmoxService>();
 
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5050);
+});
+
 // Job services: queueing, state, and the background worker that serializes provisioning.
 builder.Services.AddSingleton<IProvisioningJobStore, InMemoryProvisioningJobStore>();
 builder.Services.AddSingleton<IProvisioningJobQueue, ProvisioningJobQueue>();
