@@ -30,15 +30,25 @@ Ansible, which does not exist in this repository yet: waiting for SSH and applyi
 - watch the job's stage update live over HTMX polling until it succeeds or fails.
 
 Outside the web UI, two unauthenticated JSON endpoints generate a standard Ansible dynamic
-inventory for a single container or for every currently running one — see
-[Inventory API](#inventory-api-implemented). This is a first, narrow slice of the "discover
-hosts from Proxmox and generate inventory" capability Maintenance will eventually need; it does
-not run `ansible-playbook` itself.
+inventory for a single container or for every currently running one, and a matching custom
+Ansible inventory plugin (`ansible/inventory_plugins/homelab_orchestrator.py`) lets
+`ansible-playbook`/`ansible-inventory` consume them directly — see
+[Inventory API](#inventory-api-implemented) and [Inventory plugin](#inventory-plugin-implemented).
+This is a first, narrow slice of the "discover hosts from Proxmox and generate inventory"
+capability Maintenance will eventually need.
+
+A second page, the [Ansible Runner](#ansible-runner-implemented), does run `ansible-playbook`:
+an operator picks one of the playbooks committed under `ansible/playbooks/` and a target — a
+specific running container, every running container currently carrying a given Proxmox tag, or
+every running container — and a background worker runs it, streaming the captured output back
+to the page. A top navigation bar (Provision / Ansible Runner) switches between the two pages.
 
 See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
 
-Maintenance, the playbook catalog, and execution history (Milestones 2-4) are design-only —
-described under [Planned interface](#planned-interface) but not yet implemented.
+Maintenance and execution history (Milestones 2 and 4) are design-only — described under
+[Planned interface](#planned-interface) but not yet implemented. The playbook catalog
+(Milestone 3) is partially implemented by the Ansible Runner above; see that section for what's
+still missing (per-playbook metadata/forms and persisted execution history).
 
 ## Planned interface
 
@@ -162,6 +172,7 @@ homelab-orchestrator/
 |       |-- Options/
 |       |-- Pages/
 |       |   |-- Provision/
+|       |   |-- Runner/
 |       |   |-- Maintenance/
 |       |   |-- Playbooks/
 |       |   `-- Executions/
@@ -175,6 +186,7 @@ homelab-orchestrator/
 |   |-- requirements.yml
 |   |-- playbooks/
 |   |   |-- apply-base.yml
+|   |   |-- ssh-check.yml
 |   |   |-- maintenance/
 |   |   `-- catalog/
 |   `-- roles/
@@ -244,9 +256,19 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
     "OrchestratorPrivateKeyPath": "/root/.ssh/id_ed25519",
     "RemoteUser": "root",
     "Port": 22
+  },
+  "Ansible": {
+    "RepositoryRoot": "",
+    "ExecutablePath": "ansible-playbook",
+    "InventoryFile": "inventory/orchestrator.yml",
+    "TimeoutSeconds": 600
   }
 }
 ```
+
+`Ansible:RepositoryRoot` left blank (the default) resolves to the `ansible/` directory that ships
+alongside `src/` and `tests/` in this repository; set it explicitly if a deployment lays out
+files differently. `Ansible:InventoryFile` is resolved relative to `RepositoryRoot`.
 
 Supply the Proxmox token through secrets or the process environment:
 
@@ -291,7 +313,10 @@ The application exposes two read-only, unauthenticated JSON endpoints that gener
 Ansible dynamic-inventory document (the same `_meta`/`hostvars` shape `ansible-inventory --list`
 and inventory scripts/plugins produce — see
 [SSH key management](#ssh-key-management) for where `ansible_user`/`ansible_port`/
-`ansible_ssh_private_key_file` come from):
+`ansible_ssh_private_key_file` come from). Each host's hostvars also include `tags`: Proxmox's
+own semicolon-separated tag string (e.g. `base;managed-by-orchestrator;mqtt`), split, trimmed,
+and returned as a JSON array — always present, empty (`[]`) rather than missing or `null` for an
+untagged container.
 
 ```text
 GET /api/inventory/containers/{vmid}   -> inventory containing just that one container
@@ -313,18 +338,53 @@ regardless of the container's power state; `/containers/running` silently exclud
 currently running. Neither endpoint requires authentication yet — do not expose this port beyond
 a trusted network until [authentication](#milestones) is added.
 
-These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves. The
-two paths below describe how a playbook run is expected to actually get its inventory once the
-runner exists.
+These endpoints only generate inventory; they do not invoke `ansible-playbook` themselves — that
+remains a manual step until the runner (Milestone 1's remaining items) exists.
 
-For the initial `base` run, the application already knows the new address and can use an inline host list:
+### Inventory plugin (implemented)
+
+`ansible/inventory_plugins/homelab_orchestrator.py` is a custom Ansible inventory plugin that
+calls the two endpoints above directly, so `ansible-playbook`/`ansible-inventory` can use this
+application as their inventory source with no intermediate file:
+
+```yaml
+# ansible/inventory/orchestrator.yml — every running container, grouped by tag
+plugin: homelab_orchestrator
+api_url: http://localhost:5050
+mode: running
+keyed_groups:
+  - key: tags
+    prefix: tag
+```
+
+```yaml
+# ansible/inventory/orchestrator-single.yml — one container by VMID; the intended
+# post-provision inventory source for apply-base.yml
+plugin: homelab_orchestrator
+api_url: http://localhost:5050
+mode: vmid
+vmid: 141
+```
 
 ```bash
-ansible-playbook \
-  -i '10.0.150.102,' \
-  -u root \
-  ansible/playbooks/apply-base.yml
+cd ansible
+ansible-inventory -i inventory/orchestrator.yml --graph
+ansible-playbook -i inventory/orchestrator-single.yml playbooks/apply-base.yml
 ```
+
+`ansible/ansible.cfg` enables the plugin (`enable_plugins = homelab_orchestrator, auto, yaml,
+ini`) and points `roles_path` at `ansible/roles` so playbooks under `ansible/playbooks/` can find
+roles like `base`. The plugin supports the standard `compose`/`groups`/`keyed_groups`/`strict`
+options (via Ansible's `constructed` fragment — that's how `orchestrator.yml` above turns `tags`
+into `tag_base`/`tag_mqtt`/... groups) plus `validate_certs` and `timeout`. A parse failure —
+Proxmox unreachable, an unknown VMID (HTTP 404), or a malformed response — raises
+`AnsibleParserError` with a specific message; it never falls back to a silently empty inventory.
+
+For the initial `base` run right after provisioning, use `orchestrator-single.yml` as shown
+above (or, without the plugin, an inline host list works too:
+`ansible-playbook -i '10.0.150.102,' -u root ansible/playbooks/apply-base.yml`). `base` itself is
+currently a placeholder role (`ansible/roles/base/tasks/main.yml`) — it runs and does nothing
+until its real tasks are decided.
 
 For maintenance and catalog playbooks, the application should query Proxmox, filter eligible guests, and generate an inventory JSON document for that execution. Any temporary files must be written beneath:
 
@@ -333,6 +393,46 @@ For maintenance and catalog playbooks, the application should query Proxmox, fil
 ```
 
 The application must pass arguments through `ProcessStartInfo.ArgumentList`; do not construct a shell command by concatenating user input.
+
+## Ansible Runner (implemented)
+
+The Ansible Runner page (`/Runner`) lets an operator run any playbook committed directly under
+`ansible/playbooks/` (not its subdirectories) against a target picked from a dropdown, with no
+free-text command or path ever accepted from the browser:
+
+- **Playbooks** are discovered by `PlaybookCatalog` (`Services/Ansible/PlaybookCatalog.cs`),
+  which lists `*.yml`/`*.yaml` files directly under `Ansible:RepositoryRoot`/`playbooks` — one
+  level only, no subdirectories — every time the page loads. Selecting a playbook only ever
+  resolves back to a path this listing just produced; a name that doesn't match is rejected, and
+  a defense-in-depth check also confirms the resolved path still sits under `playbooks/`. This is
+  a plain listing, not the metadata-driven catalog with per-playbook input forms described under
+  [Playbook catalog](#playbook-catalog) below — every playbook here runs with no extra variables.
+- **Targets** are one of:
+  - a specific container, chosen by hostname, from every *currently running* container;
+  - a tag group — every currently running container carrying a given Proxmox tag;
+  - all currently running containers (no `--limit` at all).
+
+  The dropdown is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page
+  load, but that choice is never trusted as still valid once the run actually starts: the
+  background worker (`AnsibleRunWorker`) re-fetches running containers immediately before
+  building the `ansible-playbook` command and fails the job — without starting a process — if
+  the chosen container is no longer running or no running container still carries the chosen
+  tag. A tag is translated to the same group name Ansible's own `keyed_groups` would produce
+  (`AnsibleGroupName`, e.g. tag `mqtt` -> group `tag_mqtt`, matching the `tag` prefix configured
+  in `inventory/orchestrator.yml`), so `--limit tag_mqtt` matches the live inventory plugin's
+  groups.
+- **Execution** goes through the same job-queue/background-worker pattern as provisioning
+  (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and the
+  page polls its status over HTMX until it reaches `Succeeded` or `Failed`. `AnsibleProcessRunner`
+  is the only place that spawns `ansible-playbook`, via `ProcessStartInfo`/`ArgumentList` with
+  `UseShellExecute = false` — `-i <Ansible:InventoryFile>`, an optional `--limit <target>`, then
+  the resolved playbook path — and captures stdout/stderr line-by-line onto the job record.
+  Captured output is rendered with plain Razor interpolation (auto HTML-encoded), never
+  `Html.Raw`. A run that exceeds `Ansible:TimeoutSeconds` is killed (with its full process tree)
+  and the job fails.
+- **The SSH connectivity check** (`ansible/playbooks/ssh-check.yml`) is a safe, read-only
+  playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
+  container is reachable over SSH before running anything else against it; it makes no changes.
 
 ## Playbook catalog
 
@@ -376,8 +476,10 @@ Requirements:
 - an orchestrator SSH keypair at `/root/.ssh/id_ed25519(.pub)` and workstation keys in
   `/root/.ssh/authorized_keys` (see [SSH key management](#ssh-key-management)) — provisioning
   runs without them, but new containers will have no key-based SSH access until they exist
-- Ansible Core, SSH access to provisioned containers — only once Ansible integration
-  (Milestone 1's remaining items) is implemented; not required to run what exists today
+- Ansible Core (`ansible-playbook`/`ansible-inventory`) and SSH access to provisioned
+  containers — required to use the [Ansible Runner](#ansible-runner-implemented) page;
+  provisioning itself still runs without it (Milestone 1's `base`/SSH-wait steps remain
+  unimplemented)
 
 Restore, build, and run:
 
@@ -388,13 +490,13 @@ dotnet test --no-build
 dotnet run --project src/HomelabOrchestrator
 ```
 
-Once the `ansible/` directory exists, validate its content with:
+Validate the Ansible content (run from `ansible/` so its `ansible.cfg` — inventory plugin and
+`roles_path` — is picked up):
 
 ```bash
-ansible-playbook \
-  --syntax-check \
-  -i 'localhost,' \
-  ansible/playbooks/apply-base.yml
+cd ansible
+ansible-playbook --syntax-check -i 'localhost,' playbooks/apply-base.yml
+ansible-inventory -i inventory/orchestrator.yml --list
 ```
 
 ## Milestones

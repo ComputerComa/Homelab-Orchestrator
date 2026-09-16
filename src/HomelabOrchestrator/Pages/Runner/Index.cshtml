@@ -1,0 +1,78 @@
+@page
+@model IndexModel
+
+<h2>Ansible Runner</h2>
+
+@if (Model.Playbooks.Count == 0)
+{
+    <div class="banner banner-error">
+        <h2>No playbooks found</h2>
+        <p>Nothing was found under the configured Ansible playbooks directory.</p>
+    </div>
+}
+else
+{
+    <form method="post"
+          hx-post
+          hx-page="Index"
+          hx-page-handler="Review"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#spinner"
+          hx-disabled-elt="find button[type='submit']">
+        @Html.AntiForgeryToken()
+
+        <div class="card">
+            <h2>Run a playbook</h2>
+
+            <div class="field">
+                <label asp-for="Form.PlaybookName">Playbook</label>
+                <select asp-for="Form.PlaybookName">
+                    @foreach (var playbook in Model.Playbooks)
+                    {
+                        <option value="@playbook.Name">@playbook.Name</option>
+                    }
+                </select>
+                <span asp-validation-for="Form.PlaybookName" class="field-error"></span>
+            </div>
+
+            <div class="field">
+                <label asp-for="Form.Target">Target</label>
+                <select asp-for="Form.Target">
+                    <option value="all">All running containers</option>
+                    @if (Model.Targets.RunningHostnames.Count > 0)
+                    {
+                        <optgroup label="Specific container">
+                            @foreach (var hostname in Model.Targets.RunningHostnames)
+                            {
+                                <option value="vm:@hostname">@hostname</option>
+                            }
+                        </optgroup>
+                    }
+                    @if (Model.Targets.Tags.Count > 0)
+                    {
+                        <optgroup label="Tag group">
+                            @foreach (var tag in Model.Targets.Tags)
+                            {
+                                <option value="tag:@tag">@tag</option>
+                            }
+                        </optgroup>
+                    }
+                </select>
+                <span asp-validation-for="Form.Target" class="field-error"></span>
+                <p class="muted">
+                    Both lists are today's currently running containers — the run itself
+                    re-checks this immediately before executing, since a container's state can
+                    change between loading this page and confirming the run.
+                </p>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn btn-primary">Review</button>
+                <span id="spinner" class="htmx-indicator">Working&hellip;</span>
+            </div>
+        </div>
+    </form>
+}
+
+<div id="result"></div>

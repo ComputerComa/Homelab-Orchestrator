@@ -5,3 +5,8 @@ obj/
 .vscode/
 appsettings.*.local.json
 appsettings.json
+
+# Ansible
+__pycache__/
+*.pyc
+*.retry

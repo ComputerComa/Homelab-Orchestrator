@@ -1,0 +1,8 @@
+---
+# Placeholder: the concrete base-role tasks (packages, timezone, locale, users, etc.) are not
+# decided yet. This keeps apply-base.yml runnable end-to-end against real inventory without
+# doing anything to the target host. Replace with real, idempotent tasks when the role's scope
+# is decided — see AGENTS.md's Ansible requirements.
+- name: Base role placeholder (no-op)
+  ansible.builtin.debug:
+    msg: "base role applied to {{ inventory_hostname }} — no tasks defined yet"

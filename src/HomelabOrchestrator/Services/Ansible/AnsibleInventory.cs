@@ -27,4 +27,5 @@ public record AnsibleHostVars(
     [property: JsonPropertyName("ansible_host")] string AnsibleHost,
     [property: JsonPropertyName("ansible_user")] string AnsibleUser,
     [property: JsonPropertyName("ansible_port")] int AnsiblePort,
-    [property: JsonPropertyName("ansible_ssh_private_key_file")] string AnsibleSshPrivateKeyFile);
+    [property: JsonPropertyName("ansible_ssh_private_key_file")] string AnsibleSshPrivateKeyFile,
+    [property: JsonPropertyName("tags")] IReadOnlyList<string> Tags);

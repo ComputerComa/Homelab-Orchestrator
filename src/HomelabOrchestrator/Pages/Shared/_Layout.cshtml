@@ -11,6 +11,10 @@
     <header class="site-header">
         <h1>Homelab Orchestrator</h1>
         <p class="subtitle">Provision LXC containers on Proxmox VE</p>
+        <nav class="site-nav">
+            <a href="/" class="@(Context.Request.Path == "/" ? "active" : "")">Provision</a>
+            <a href="/Runner" class="@(Context.Request.Path.StartsWithSegments("/Runner") ? "active" : "")">Ansible Runner</a>
+        </nav>
     </header>
     <main class="container">
         @RenderBody()

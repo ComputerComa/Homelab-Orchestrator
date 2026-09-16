@@ -135,6 +135,9 @@ there is no SSH input anywhere in the web UI.
   (`Endpoints/InventoryEndpoints.cs`) for external tooling. Those two endpoints are
   unauthenticated; do not add a third without also covering it under
   [authentication](#security) once that exists.
+- `ansible/inventory_plugins/homelab_orchestrator.py` consumes those same two endpoints from the
+  Ansible side (enabled via `ansible/ansible.cfg`'s `enable_plugins`). Extend this plugin — don't
+  add a second one — if another endpoint or hostvar needs to reach Ansible inventory.
 - Write temporary inventory and extra-vars files beneath `/run/homelab-orchestrator/<execution-id>/`.
 - Apply restrictive file permissions to execution directories and remove them after the configured retention period.
 - Invoke `ansible-playbook` directly with `ProcessStartInfo`.
@@ -148,6 +151,18 @@ there is no SSH input anywhere in the web UI.
 - Make roles and playbooks idempotent whenever possible.
 
 The web playbook runner must only execute playbooks discovered beneath the configured approved catalog directory. Resolve and validate canonical paths to prevent traversal. Never expose a browser field for an arbitrary command or arbitrary filesystem path.
+
+The Ansible Runner page (`/Runner`, `Pages/Runner/`) implements this for `ansible/playbooks/`
+(top-level files only): `PlaybookCatalog` (`Services/Ansible/PlaybookCatalog.cs`) is the only
+component that lists playbooks and resolves a name to a path, and it only ever resolves a name
+to a path it just discovered itself — extend it rather than adding a second lookup if playbook
+discovery needs to change. Its run targets (a single running container, a Proxmox-tag group, or
+all running containers) are re-resolved against live Proxmox state inside `AnsibleRunWorker`
+immediately before building the `ansible-playbook` command — the same "never trust a stale
+browser value" rule as VMID/address/template — never inside the page model. Tag targets are
+translated to Ansible group names with `AnsibleGroupName`, which must keep matching Ansible's own
+`keyed_groups` sanitization (`[^A-Za-z0-9_]` -> `_`) so `--limit` matches the live inventory
+plugin's groups.
 
 ## Jobs and concurrency
 
@@ -213,6 +228,9 @@ Cancelled
 - Show the actual target host and operation before disruptive actions.
 - Keep provisioning fields minimal; infrastructure defaults belong in configuration.
 - Do not expose secret configuration values in forms.
+- The shared layout (`Pages/Shared/_Layout.cshtml`) carries a top navigation bar linking every
+  top-level page (currently Provision and Ansible Runner). Add new top-level pages there rather
+  than leaving them reachable only by typing a URL.
 
 ## Tests
 

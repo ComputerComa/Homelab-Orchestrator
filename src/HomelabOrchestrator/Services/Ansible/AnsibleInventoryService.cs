@@ -78,7 +78,8 @@ public class AnsibleInventoryService(
             AnsibleHost: ipAddress,
             AnsibleUser: _sshOptions.RemoteUser,
             AnsiblePort: _sshOptions.Port,
-            AnsibleSshPrivateKeyFile: _sshOptions.OrchestratorPrivateKeyPath);
+            AnsibleSshPrivateKeyFile: _sshOptions.OrchestratorPrivateKeyPath,
+            Tags: container.Tags);
         return true;
     }
 
