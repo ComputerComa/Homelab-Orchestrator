@@ -99,7 +99,7 @@ public class ProxmoxService : IProxmoxService
                 onboot: request.StartAtBoot,
                 start: request.Start,
                 tags: "base;managed-by-orchestrator",
-                ssh_public_keys: request.SshPublicKey,
+                ssh_public_keys: request.SshPublicKeys,
                 features: "nesting=1");
 
             EnsureSuccess(result, "create the LXC container");

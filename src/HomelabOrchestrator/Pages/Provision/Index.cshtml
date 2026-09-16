@@ -52,16 +52,16 @@ else
                 </div>
             </div>
 
-            <div class="field">
-                <label asp-for="Form.SshPublicKey">SSH public key</label>
-                <textarea asp-for="Form.SshPublicKey" rows="3" placeholder="ssh-ed25519 AAAA..."></textarea>
-                <span asp-validation-for="Form.SshPublicKey" class="field-error"></span>
-            </div>
-
             <div class="field-row">
                 <label class="checkbox"><input asp-for="Form.Start" type="checkbox" /> Start after creation</label>
                 <label class="checkbox"><input asp-for="Form.StartAtBoot" type="checkbox" /> Start at boot</label>
             </div>
+
+            <p class="muted">
+                SSH access is configured on the orchestrator, not per container: the container will
+                trust the workstation keys in <code>@Model.AuthorizedKeysPath</code> plus the
+                orchestrator's own key.
+            </p>
 
             <div class="actions">
                 <button type="submit" class="btn btn-primary">Review</button>

@@ -7,7 +7,7 @@ public class ContainerRequest
     public required string Hostname { get; init; }
     public required string IpAddress { get; init; }
     public required string Template { get; init; }
-    public required string SshPublicKey { get; init; }
+    public required string SshPublicKeys { get; init; }
     public int Cores { get; init; }
     public int MemoryMB { get; init; }
     public int SwapMB { get; init; }

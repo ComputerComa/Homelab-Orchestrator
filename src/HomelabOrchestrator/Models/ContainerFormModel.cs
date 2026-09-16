@@ -8,7 +8,8 @@ namespace HomelabOrchestrator.Models;
 /// The editable provisioning form. VMID/address/template are carried as hidden fields purely so
 /// the review step can redisplay the preview the operator already saw — they are display-only
 /// and are never read back into a <see cref="ProvisioningRequest"/>; the worker recalculates
-/// them fresh immediately before creation (see AGENTS.md).
+/// them fresh immediately before creation (see AGENTS.md). SSH keys never appear on this model
+/// at all: they come from <see cref="Services.Ssh.ISshPublicKeyProvider"/> on the server side only.
 /// </summary>
 public class ContainerFormModel
 {
@@ -32,13 +33,10 @@ public class ContainerFormModel
     [Range(1, 2048, ErrorMessage = "Disk size must be at least 1 GB.")]
     public int DiskGB { get; set; }
 
-    [Required(ErrorMessage = "An SSH public key is required.")]
-    public string SshPublicKey { get; set; } = "";
-
     public bool Start { get; set; } = true;
     public bool StartAtBoot { get; set; } = true;
 
-    public static ContainerFormModel FromDefaults(ProxmoxOptions options, ClusterPlacement placement, string sshPublicKey) => new()
+    public static ContainerFormModel FromDefaults(ProxmoxOptions options, ClusterPlacement placement) => new()
     {
         Vmid = placement.Vmid,
         IpAddress = placement.IpAddress,
@@ -47,7 +45,6 @@ public class ContainerFormModel
         MemoryMB = options.DefaultMemoryMB,
         SwapMB = options.DefaultSwapMB,
         DiskGB = options.DefaultDiskGB,
-        SshPublicKey = sshPublicKey,
         Start = true,
         StartAtBoot = true,
     };
@@ -58,7 +55,6 @@ public class ContainerFormModel
         MemoryMB: MemoryMB,
         SwapMB: SwapMB,
         DiskGB: DiskGB,
-        SshPublicKey: SshPublicKey,
         Start: Start,
         StartAtBoot: StartAtBoot);
 }

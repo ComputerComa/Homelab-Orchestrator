@@ -38,6 +38,10 @@ Do not change these without an explicit request:
 - Do not add static managed host inventory to Git.
 - The standard Ansible role is named `base`, never `baseline`.
 - Keep secrets outside source control.
+- Source SSH public keys from the orchestrator's own filesystem
+  (`/root/.ssh/authorized_keys` and `/root/.ssh/id_ed25519.pub`), never from a browser field
+  or a job record; never generate, rotate, or copy the orchestrator's private key
+  automatically. See [SSH key management](#ssh-key-management).
 
 ## Boundaries
 
@@ -62,7 +66,8 @@ The expected initial workflow is:
 3. calculate the IP address using configured policy.
 4. Find the newest downloaded Debian 13 LXC template.
 5. Create an unprivileged LXC with `nesting=1`.
-6. Configure storage, CPU, memory, swap, network, DNS, SSH key, and tags.
+6. Configure storage, CPU, memory, swap, network, DNS, tags, and the combined SSH public keys
+   from `ISshPublicKeyProvider` (see [SSH key management](#ssh-key-management)).
 7. Wait for the Proxmox task to finish.
 8. Wait for SSH to become available.
 9. Run `ansible/playbooks/apply-base.yml` against the new address.
@@ -91,6 +96,31 @@ unprivileged=1
 features=nesting=1
 tags=base;managed-by-orchestrator
 ```
+
+## SSH key management
+
+The orchestrator runs as root in its own LXC and uses that root account's own SSH material —
+there is no SSH input anywhere in the web UI.
+
+- `SshOptions` (bound from the `Ssh` configuration section) holds `AuthorizedKeysPath`
+  (default `/root/.ssh/authorized_keys`), `OrchestratorPublicKeyPath`
+  (default `/root/.ssh/id_ed25519.pub`), `OrchestratorPrivateKeyPath`
+  (default `/root/.ssh/id_ed25519`), `RemoteUser` (default `root`), and `Port` (default `22`).
+- `ISshPublicKeyProvider` asynchronously reads `AuthorizedKeysPath` and
+  `OrchestratorPublicKeyPath`, ignores blank and comment-only lines, validates normal OpenSSH
+  public-key records, deduplicates identical keys by key type and encoded key data, and returns
+  deterministic newline-delimited text. It never reads, returns, or logs
+  `OrchestratorPrivateKeyPath`.
+- `ProvisioningWorker` calls the provider immediately before creating the container — the same
+  "never trust a stale value" rule that applies to VMID/address/template applies here: SSH keys
+  are never carried on `ProvisioningRequest`, `ContainerFormModel`, or a job record.
+- `OrchestratorPrivateKeyPath` is reserved for the future Ansible runner to connect back to
+  provisioned containers as `RemoteUser` on `Port`. Nothing in provisioning today reads it; do
+  not wire it up before the Ansible runner exists.
+- Never generate an SSH keypair automatically, copy the private key into a container, add an
+  SSH key field to any form or API response, or store key material on a job record.
+- Changing `AuthorizedKeysPath` or the orchestrator's own key files only affects containers
+  created afterward; do not try to retroactively update already-provisioned containers.
 
 ## Ansible requirements
 
@@ -142,6 +172,7 @@ Cancelled
 
 - Never commit or print real credentials.
 - Never return secrets in API responses, HTML, validation messages, or execution logs.
+- Never read, return, or log the orchestrator's private key (`Ssh:OrchestratorPrivateKeyPath`); only its public half is ever combined and sent to Proxmox.
 - Do not place secret values in process arguments when a protected file or environment variable is supported.
 - Apply authentication before treating the application as production-ready.
 - Require explicit confirmation for destructive and disruptive actions.
@@ -184,6 +215,7 @@ Add tests alongside meaningful behavior. Prioritize:
 - VMID-to-IP calculation and invalid ranges;
 - Debian template selection;
 - Proxmox response translation;
+- SSH public-key parsing, deduplication, and deterministic combined output;
 - provisioning state transitions;
 - inventory generation;
 - playbook-path allowlisting and traversal rejection;

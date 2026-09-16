@@ -2,6 +2,7 @@ using HomelabOrchestrator.Models;
 using HomelabOrchestrator.Options;
 using HomelabOrchestrator.Services.Provisioning;
 using HomelabOrchestrator.Services.Proxmox;
+using HomelabOrchestrator.Services.Ssh;
 using Microsoft.Extensions.Options;
 
 namespace HomelabOrchestrator.Services.Jobs;
@@ -12,12 +13,14 @@ namespace HomelabOrchestrator.Services.Jobs;
 /// only calls <see cref="IProxmoxService.GetNextVmIdAsync"/> after the previous job's creation
 /// has fully finished, so two jobs can never be handed the same VMID or calculated address.
 /// VMID/address/template are recalculated here, immediately before creation — a browser
-/// preview shown earlier is never trusted or reused.
+/// preview shown earlier is never trusted or reused. SSH keys are likewise fetched fresh from
+/// <see cref="ISshPublicKeyProvider"/> right before creation, never carried on the job itself.
 /// </summary>
 public class ProvisioningWorker(
     IProvisioningJobQueue queue,
     IProvisioningJobStore store,
     IProxmoxService proxmox,
+    ISshPublicKeyProvider sshPublicKeys,
     IOptions<ProxmoxOptions> options,
     ILogger<ProvisioningWorker> logger) : BackgroundService
 {
@@ -55,13 +58,16 @@ public class ProvisioningWorker(
                 Template = template,
             });
 
+            // Fetched fresh, immediately before creation — never carried on the job record.
+            var combinedKeys = await sshPublicKeys.GetCombinedPublicKeysAsync(cancellationToken);
+
             var containerRequest = new ContainerRequest
             {
                 Vmid = vmid,
                 Hostname = job.Request.Hostname,
                 IpAddress = ipAddress,
                 Template = template,
-                SshPublicKey = job.Request.SshPublicKey,
+                SshPublicKeys = combinedKeys,
                 Cores = job.Request.Cores,
                 MemoryMB = job.Request.MemoryMB,
                 SwapMB = job.Request.SwapMB,
