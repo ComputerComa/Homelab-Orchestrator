@@ -102,6 +102,29 @@ body {
     font-size: 1.05rem;
 }
 
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+.data-table th,
+.data-table td {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.data-table th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.data-table tr.ineligible {
+    color: var(--muted);
+}
+
 .muted {
     color: var(--muted);
     font-size: 0.85em;

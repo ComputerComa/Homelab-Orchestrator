@@ -125,6 +125,10 @@ builder.Services.AddHostedService<ProvisioningWorker>();
 // Application service: the boundary Razor Pages call into instead of Proxmox/job internals directly.
 builder.Services.AddSingleton<IProvisioningService, ProvisioningService>();
 
+// Adopts pre-existing containers whose actual configured address already matches the VMID
+// convention, so they can be tagged managed-by-orchestrator without guessing.
+builder.Services.AddSingleton<IContainerReconciliationService, ContainerReconciliationService>();
+
 // Application service backing the read-only Ansible inventory endpoints.
 builder.Services.AddSingleton<IAnsibleInventoryService, AnsibleInventoryService>();
 

@@ -83,6 +83,12 @@ public class ProvisioningWorkerTests
             LastRequest = request;
             return Task.FromResult(new CreatedContainer(request.Vmid, request.Hostname, request.IpAddress, request.Template, TimeSpan.Zero));
         }
+
+        public Task<string?> GetContainerAddressAsync(int vmid, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task AddTagAsync(int vmid, string tag, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FixedSshPublicKeyProvider(string keys) : ISshPublicKeyProvider

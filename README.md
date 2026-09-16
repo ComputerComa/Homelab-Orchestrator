@@ -40,7 +40,13 @@ A second page, the [Ansible Runner](#ansible-runner-implemented), does run `ansi
 an operator picks one of the playbooks committed under `ansible/playbooks/` and a target — a
 specific running container, every running container currently carrying a given Proxmox tag, or
 every running container — and a background worker runs it, streaming the captured output back
-to the page. A top navigation bar (Provision / Ansible Runner) switches between the two pages.
+to the page.
+
+A third page, [Reconcile](#reconcile-pre-existing-containers-implemented), finds containers that
+predate the orchestrator (not tagged `managed-by-orchestrator`) and offers to adopt the ones whose
+actual configured address already matches what the VMID convention expects — never guessing for
+the ones that don't. A top navigation bar (Provision / Ansible Runner / Reconcile) switches
+between all three pages.
 
 The whole web UI requires signing in as the single seeded operator account, and the two
 inventory endpoints above are restricted to loopback callers — see
@@ -180,6 +186,7 @@ homelab-orchestrator/
 |       |   |-- Account/
 |       |   |-- Provision/
 |       |   |-- Runner/
+|       |   |-- Reconcile/
 |       |   |-- Maintenance/
 |       |   |-- Playbooks/
 |       |   `-- Executions/
@@ -455,6 +462,32 @@ free-text command or path ever accepted from the browser:
 - **The SSH connectivity check** (`ansible/playbooks/ssh-check.yml`) is a safe, read-only
   playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
   container is reachable over SSH before running anything else against it; it makes no changes.
+
+## Reconcile pre-existing containers (implemented)
+
+Provisioning tags every container it creates `managed-by-orchestrator`, but that tag obviously
+can't retroactively appear on containers created before this app existed. The Reconcile page
+(`/Reconcile`) finds those and offers to adopt the ones it can verify, rather than either ignoring
+them or guessing:
+
+- Lists every container **not already tagged** `managed-by-orchestrator`, alongside the address
+  the VMID convention expects it to have (`NetworkPrefix.VMID`) and the address it's **actually**
+  configured with in Proxmox — read from its `net0` device
+  (`IProxmoxService.GetContainerAddressAsync`), never assumed. A container on DHCP/manual
+  addressing (no static `ip=`) has no actual address to compare, so it's shown but never eligible.
+- A container is only **eligible** — and only gets a pre-checked checkbox — when its actual
+  address already equals the expected one. A mismatch is shown, not hidden, so nothing is a
+  silent surprise; it's just not selectable.
+- Confirming re-verifies every selected container's address **again**, immediately before
+  tagging it (`ContainerReconciliationService.AdoptAsync`) — the same "never trust a stale
+  browser value" rule as provisioning and the Ansible Runner. A container that changed or a
+  tampered request for a container that was never eligible is skipped, not tagged.
+- Adoption only ever adds the `managed-by-orchestrator` tag — never `base`, since adopting a
+  container doesn't mean the `base` role has actually been applied to it, and claiming so would
+  mislead any future logic that trusts that tag.
+- A VMID that falls outside `Proxmox:IpHostMin`/`IpHostMax` has no possible expected address
+  under the convention at all, so it's left out of the list entirely rather than shown as a
+  permanently-ineligible row.
 
 ## Authentication (implemented)
 

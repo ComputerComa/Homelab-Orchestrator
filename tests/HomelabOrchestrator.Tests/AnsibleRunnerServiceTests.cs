@@ -67,5 +67,11 @@ public class AnsibleRunnerServiceTests
 
         public Task<IReadOnlyList<ContainerSummary>> ListContainersAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(containers);
+
+        public Task<string?> GetContainerAddressAsync(int vmid, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task AddTagAsync(int vmid, string tag, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

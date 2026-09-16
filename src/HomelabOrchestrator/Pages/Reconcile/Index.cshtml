@@ -1,0 +1,80 @@
+@page
+@model IndexModel
+
+<h2>Reconcile containers</h2>
+
+<p class="muted">
+    Containers Proxmox knows about that aren't tagged <code>managed-by-orchestrator</code> yet —
+    typically ones created before this app existed. A container is only eligible for adoption
+    when its actual configured address already matches what the VMID convention expects; nothing
+    is ever guessed. Selecting and confirming re-checks each container's address again,
+    immediately before tagging it, in case anything changed since this list loaded.
+</p>
+
+@if (Model.Result is not null)
+{
+    if (Model.Result.Adopted.Count > 0)
+    {
+        <div class="banner banner-success">
+            <h2>Adopted</h2>
+            <p>Tagged managed-by-orchestrator: @string.Join(", ", Model.Result.Adopted)</p>
+        </div>
+    }
+    if (Model.Result.Skipped.Count > 0)
+    {
+        <div class="banner banner-error">
+            <h2>Skipped</h2>
+            <p>
+                No longer eligible when re-checked (address changed or no longer matches):
+                @string.Join(", ", Model.Result.Skipped)
+            </p>
+        </div>
+    }
+}
+
+@if (Model.Candidates.Count == 0)
+{
+    <div class="card">
+        <p>No unmanaged containers found — everything Proxmox knows about is already tagged
+            <code>managed-by-orchestrator</code>, or nothing matched a checkable VMID.</p>
+    </div>
+}
+else
+{
+    <form method="post" asp-page-handler="Adopt" class="card">
+        @Html.AntiForgeryToken()
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>VMID</th>
+                    <th>Hostname</th>
+                    <th>Expected address</th>
+                    <th>Actual address</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var candidate in Model.Candidates)
+                {
+                    <tr class="@(candidate.IsEligible ? "" : "ineligible")">
+                        <td>
+                            @if (candidate.IsEligible)
+                            {
+                                <input type="checkbox" name="selectedVmids" value="@candidate.Vmid" checked />
+                            }
+                        </td>
+                        <td>@candidate.Vmid</td>
+                        <td>@candidate.Hostname</td>
+                        <td>@candidate.ExpectedAddress</td>
+                        <td>@(candidate.ActualAddress ?? "(none / DHCP)")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Adopt selected</button>
+        </div>
+    </form>
+}

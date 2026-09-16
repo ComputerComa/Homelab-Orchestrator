@@ -82,6 +82,28 @@ Do not treat a browser preview of VMID or IP address as reserved. Recalculate th
 
 If LXC creation succeeds but Ansible fails, preserve the LXC. Mark the Ansible stage failed and make it independently retryable.
 
+## Container reconciliation
+
+`ContainerReconciliationService` (`Services/Provisioning/`, backing `/Reconcile`) adopts
+containers that predate the orchestrator by tagging them `managed-by-orchestrator` — but only
+when it can verify they already fit the VMID/address convention, never by assuming it.
+
+- `IProxmoxService.GetContainerAddressAsync` reads the container's actual configured address from
+  its `net0` device. Never derive the "actual" address from the VMID convention — that's the
+  "expected" side of the comparison, not a substitute for reading real Proxmox state.
+- `ListCandidatesAsync` only lists containers not already tagged `managed-by-orchestrator`, and
+  marks one eligible only when its actual address equals the VMID-convention-expected address.
+  Show a mismatch or a DHCP/no-address container as ineligible; never hide it or silently guess.
+- `AdoptAsync` re-reads the address again, fresh, for each container immediately before tagging
+  it — the same "never trust a stale browser value" rule as provisioning and the Ansible Runner.
+  A container whose address changed, or a request for one that was never eligible, must be
+  skipped, not tagged.
+- `IProxmoxService.AddTagAsync` adds exactly one tag and nothing else. Adoption must never add
+  `base` — that tag means the `base` role has actually been applied, which adoption does not
+  guarantee, and any future maintenance logic may trust it.
+- A VMID outside `Proxmox:IpHostMin`/`IpHostMax` has no possible expected address under the
+  convention; leave it out of the candidate list rather than showing a row with nothing to compare.
+
 ## Proxmox requirements
 
 - Use a least-privilege API token supplied through configuration.
@@ -269,7 +291,7 @@ Cancelled
 - Keep provisioning fields minimal; infrastructure defaults belong in configuration.
 - Do not expose secret configuration values in forms.
 - The shared layout (`Pages/Shared/_Layout.cshtml`) carries a top navigation bar linking every
-  top-level page (currently Provision and Ansible Runner). Add new top-level pages there rather
+  top-level page (currently Provision, Ansible Runner, and Reconcile). Add new top-level pages there rather
   than leaving them reachable only by typing a URL.
 
 ## Tests
@@ -287,7 +309,8 @@ Add tests alongside meaningful behavior. Prioritize:
 - Ansible argument construction;
 - secret redaction;
 - retry behavior after a post-creation Ansible failure;
-- the `LocalhostOnly` authorization requirement, for both loopback and non-loopback addresses.
+- the `LocalhostOnly` authorization requirement, for both loopback and non-loopback addresses;
+- reconciliation eligibility (matching/mismatched/DHCP address, already-tagged, out-of-range VMID) and that adoption re-verifies before tagging instead of trusting the caller's selection.
 
 Use test doubles at the `IProxmoxService`, Ansible runner, and process boundaries. Do not require a live Proxmox server for the ordinary test suite.
 
