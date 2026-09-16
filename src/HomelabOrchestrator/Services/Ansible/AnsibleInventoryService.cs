@@ -1,23 +1,24 @@
 using HomelabOrchestrator.Models;
 using HomelabOrchestrator.Options;
-using HomelabOrchestrator.Services.Provisioning;
 using HomelabOrchestrator.Services.Proxmox;
 using Microsoft.Extensions.Options;
 
 namespace HomelabOrchestrator.Services.Ansible;
 
 /// <summary>
-/// Combines raw Proxmox facts (<see cref="IProxmoxService.ListContainersAsync"/>) with the
-/// homelab's VMID-to-address convention and the orchestrator's own SSH connection details to
-/// produce a standard Ansible dynamic-inventory document. Never queries Proxmox itself.
+/// Combines raw Proxmox facts (<see cref="IProxmoxService.ListContainersAsync"/>) and each
+/// container's actual configured address (<see cref="IProxmoxService.GetContainerAddressAsync"/>)
+/// with the orchestrator's own SSH connection details to produce a standard Ansible
+/// dynamic-inventory document. The VMID-to-address convention is never used here — it's only a
+/// prediction for provisioning and reconciliation, and reporting it as fact would mean Ansible
+/// silently connects to the wrong address for any container whose real address ever drifts from
+/// (or never matched) that convention.
 /// </summary>
 public class AnsibleInventoryService(
     IProxmoxService proxmox,
-    IOptions<ProxmoxOptions> proxmoxOptions,
     IOptions<SshOptions> sshOptions,
     ILogger<AnsibleInventoryService> logger) : IAnsibleInventoryService
 {
-    private readonly ProxmoxOptions _proxmoxOptions = proxmoxOptions.Value;
     private readonly SshOptions _sshOptions = sshOptions.Value;
 
     public async Task<AnsibleInventory?> GetContainerInventoryAsync(int vmid, CancellationToken cancellationToken = default)
@@ -30,13 +31,15 @@ public class AnsibleInventoryService(
             return null;
         }
 
-        if (!TryBuildHostEntry(container, out var hostname, out var hostVars))
+        var hostEntry = await TryBuildHostEntryAsync(container, cancellationToken);
+        if (hostEntry is null)
         {
             throw new ProxmoxOperationException(
-                $"VMID {container.Vmid} cannot be mapped safely to {_proxmoxOptions.NetworkPrefix}.x; " +
-                $"the last octet must be between {_proxmoxOptions.IpHostMin} and {_proxmoxOptions.IpHostMax}.");
+                $"Container {container.Vmid} has no static IPv4 address configured (net0 has none, or uses DHCP/manual); " +
+                "it cannot be added to Ansible inventory.");
         }
 
+        var (hostname, hostVars) = hostEntry.Value;
         return BuildInventory([hostname], new Dictionary<string, AnsibleHostVars> { [hostname] = hostVars });
     }
 
@@ -49,14 +52,16 @@ public class AnsibleInventoryService(
 
         foreach (var container in containers.Where(c => c.IsRunning))
         {
-            if (!TryBuildHostEntry(container, out var hostname, out var hostVars))
+            var hostEntry = await TryBuildHostEntryAsync(container, cancellationToken);
+            if (hostEntry is null)
             {
                 logger.LogWarning(
-                    "Skipping container {Vmid} ({Hostname}) from inventory: VMID cannot be mapped to an address under {NetworkPrefix}.x.",
-                    container.Vmid, container.Hostname, _proxmoxOptions.NetworkPrefix);
+                    "Skipping container {Vmid} ({Hostname}) from inventory: no static IPv4 address configured.",
+                    container.Vmid, container.Hostname);
                 continue;
             }
 
+            var (hostname, hostVars) = hostEntry.Value;
             hosts.Add(hostname);
             hostvars[hostname] = hostVars;
         }
@@ -64,23 +69,23 @@ public class AnsibleInventoryService(
         return BuildInventory(hosts, hostvars);
     }
 
-    private bool TryBuildHostEntry(ContainerSummary container, out string hostname, out AnsibleHostVars hostVars)
+    private async Task<(string Hostname, AnsibleHostVars HostVars)?> TryBuildHostEntryAsync(
+        ContainerSummary container, CancellationToken cancellationToken)
     {
-        hostname = string.IsNullOrWhiteSpace(container.Hostname) ? container.Vmid.ToString() : container.Hostname;
-        hostVars = null!;
-
-        if (!IpAddressCalculator.TryCalculate(container.Vmid, _proxmoxOptions.NetworkPrefix, _proxmoxOptions.IpHostMin, _proxmoxOptions.IpHostMax, out var ipAddress))
+        var ipAddress = await proxmox.GetContainerAddressAsync(container.Vmid, cancellationToken);
+        if (ipAddress is null)
         {
-            return false;
+            return null;
         }
 
-        hostVars = new AnsibleHostVars(
+        var hostname = string.IsNullOrWhiteSpace(container.Hostname) ? container.Vmid.ToString() : container.Hostname;
+        var hostVars = new AnsibleHostVars(
             AnsibleHost: ipAddress,
             AnsibleUser: _sshOptions.RemoteUser,
             AnsiblePort: _sshOptions.Port,
             AnsibleSshPrivateKeyFile: _sshOptions.OrchestratorPrivateKeyPath,
             Tags: container.Tags);
-        return true;
+        return (hostname, hostVars);
     }
 
     private static AnsibleInventory BuildInventory(IReadOnlyList<string> hosts, IReadOnlyDictionary<string, AnsibleHostVars> hostvars) =>

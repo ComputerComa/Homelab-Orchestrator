@@ -8,19 +8,13 @@ namespace HomelabOrchestrator.Tests;
 
 public class AnsibleInventoryServiceTests
 {
-    private static AnsibleInventoryService BuildService(IReadOnlyList<ContainerSummary> containers, SshOptions? sshOptions = null)
+    private static AnsibleInventoryService BuildService(
+        IReadOnlyList<ContainerSummary> containers, Dictionary<int, string?>? addresses = null, SshOptions? sshOptions = null)
     {
-        var proxmoxOptions = Microsoft.Extensions.Options.Options.Create(new ProxmoxOptions
-        {
-            NetworkPrefix = "10.0.150",
-            IpHostMin = 2,
-            IpHostMax = 254,
-        });
         var ssh = Microsoft.Extensions.Options.Options.Create(sshOptions ?? new SshOptions());
 
         return new AnsibleInventoryService(
-            new FakeProxmoxService(containers),
-            proxmoxOptions,
+            new FakeProxmoxService(containers, addresses ?? []),
             ssh,
             NullLogger<AnsibleInventoryService>.Instance);
     }
@@ -28,10 +22,12 @@ public class AnsibleInventoryServiceTests
     [Fact]
     public async Task GetContainerInventoryAsync_returns_an_inventory_with_just_that_host()
     {
-        var service = BuildService([
-            new ContainerSummary(141, "web-01", "running", []),
-            new ContainerSummary(142, "db-01", "stopped", []),
-        ]);
+        var service = BuildService(
+            [
+                new ContainerSummary(141, "web-01", "running", []),
+                new ContainerSummary(142, "db-01", "stopped", []),
+            ],
+            new Dictionary<int, string?> { [141] = "10.0.150.141" });
 
         var inventory = await service.GetContainerInventoryAsync(141);
 
@@ -49,10 +45,25 @@ public class AnsibleInventoryServiceTests
     }
 
     [Fact]
+    public async Task GetContainerInventoryAsync_reports_the_actual_address_even_when_it_differs_from_the_vmid_convention()
+    {
+        // VMID 141 would compute 10.0.150.141 under the old convention-based logic — this
+        // container's real net0 address is something else entirely (drifted, or never matched).
+        var service = BuildService(
+            [new ContainerSummary(141, "web-01", "running", [])],
+            new Dictionary<int, string?> { [141] = "10.0.99.7" });
+
+        var inventory = await service.GetContainerInventoryAsync(141);
+
+        Assert.Equal("10.0.99.7", inventory!.Meta.Hostvars["web-01"].AnsibleHost);
+    }
+
+    [Fact]
     public async Task GetContainerInventoryAsync_includes_connection_details_from_ssh_options()
     {
         var service = BuildService(
             [new ContainerSummary(141, "web-01", "running", [])],
+            new Dictionary<int, string?> { [141] = "10.0.150.141" },
             new SshOptions { RemoteUser = "root", Port = 2222, OrchestratorPrivateKeyPath = "/root/.ssh/id_ed25519" });
 
         var inventory = await service.GetContainerInventoryAsync(141);
@@ -66,9 +77,9 @@ public class AnsibleInventoryServiceTests
     [Fact]
     public async Task GetContainerInventoryAsync_includes_tags_when_the_container_has_several()
     {
-        var service = BuildService([
-            new ContainerSummary(141, "web-01", "running", ["base", "managed-by-orchestrator", "mqtt"]),
-        ]);
+        var service = BuildService(
+            [new ContainerSummary(141, "web-01", "running", ["base", "managed-by-orchestrator", "mqtt"])],
+            new Dictionary<int, string?> { [141] = "10.0.150.141" });
 
         var inventory = await service.GetContainerInventoryAsync(141);
 
@@ -78,7 +89,9 @@ public class AnsibleInventoryServiceTests
     [Fact]
     public async Task GetContainerInventoryAsync_produces_an_empty_tags_array_when_the_container_has_none()
     {
-        var service = BuildService([new ContainerSummary(141, "web-01", "running", [])]);
+        var service = BuildService(
+            [new ContainerSummary(141, "web-01", "running", [])],
+            new Dictionary<int, string?> { [141] = "10.0.150.141" });
 
         var inventory = await service.GetContainerInventoryAsync(141);
 
@@ -88,21 +101,25 @@ public class AnsibleInventoryServiceTests
     }
 
     [Fact]
-    public async Task GetContainerInventoryAsync_throws_when_the_vmid_cannot_be_mapped_to_an_address()
+    public async Task GetContainerInventoryAsync_throws_when_the_container_has_no_static_address()
     {
-        var service = BuildService([new ContainerSummary(1, "out-of-range", "running", [])]);
+        var service = BuildService(
+            [new ContainerSummary(141, "dhcp-host", "running", [])],
+            new Dictionary<int, string?> { [141] = null });
 
-        await Assert.ThrowsAsync<ProxmoxOperationException>(() => service.GetContainerInventoryAsync(1));
+        await Assert.ThrowsAsync<ProxmoxOperationException>(() => service.GetContainerInventoryAsync(141));
     }
 
     [Fact]
     public async Task GetRunningContainersInventoryAsync_excludes_stopped_containers()
     {
-        var service = BuildService([
-            new ContainerSummary(141, "web-01", "running", []),
-            new ContainerSummary(142, "db-01", "stopped", []),
-            new ContainerSummary(143, "cache-01", "running", []),
-        ]);
+        var service = BuildService(
+            [
+                new ContainerSummary(141, "web-01", "running", []),
+                new ContainerSummary(142, "db-01", "stopped", []),
+                new ContainerSummary(143, "cache-01", "running", []),
+            ],
+            new Dictionary<int, string?> { [141] = "10.0.150.141", [143] = "10.0.150.143" });
 
         var inventory = await service.GetRunningContainersInventoryAsync();
 
@@ -122,19 +139,21 @@ public class AnsibleInventoryServiceTests
     }
 
     [Fact]
-    public async Task GetRunningContainersInventoryAsync_skips_unmappable_containers_instead_of_failing_the_whole_list()
+    public async Task GetRunningContainersInventoryAsync_skips_containers_with_no_static_address_instead_of_failing_the_whole_list()
     {
-        var service = BuildService([
-            new ContainerSummary(1, "out-of-range", "running", []),
-            new ContainerSummary(141, "web-01", "running", []),
-        ]);
+        var service = BuildService(
+            [
+                new ContainerSummary(141, "dhcp-host", "running", []),
+                new ContainerSummary(142, "web-01", "running", []),
+            ],
+            new Dictionary<int, string?> { [141] = null, [142] = "10.0.150.142" });
 
         var inventory = await service.GetRunningContainersInventoryAsync();
 
         Assert.Equal(["web-01"], inventory.All.Hosts);
     }
 
-    private sealed class FakeProxmoxService(IReadOnlyList<ContainerSummary> containers) : IProxmoxService
+    private sealed class FakeProxmoxService(IReadOnlyList<ContainerSummary> containers, Dictionary<int, string?> addresses) : IProxmoxService
     {
         public Task<int> GetNextVmIdAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
@@ -147,7 +166,7 @@ public class AnsibleInventoryServiceTests
             Task.FromResult(containers);
 
         public Task<string?> GetContainerAddressAsync(int vmid, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            Task.FromResult(addresses.GetValueOrDefault(vmid));
 
         public Task AddTagAsync(int vmid, string tag, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
