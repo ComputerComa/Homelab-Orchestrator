@@ -228,6 +228,11 @@ body {
     font-size: 0.85rem;
 }
 
+.btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 .banner {
     border-radius: 8px;
     padding: 1rem 1.25rem;
@@ -463,8 +468,8 @@ body {
 
 .container-row {
     display: flex;
-    align-items: center;
-    gap: 0.6rem;
+    flex-direction: column;
+    gap: 0.35rem;
     padding: 0.55rem 0.7rem;
     border: 1px solid transparent;
     border-radius: 5px;
@@ -478,6 +483,13 @@ body {
 
 .container-row.hidden {
     display: none;
+}
+
+.container-row-main {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
 }
 
 .container-checkbox {
@@ -496,7 +508,11 @@ body {
 
 .container-hostname {
     flex: 1;
+    min-width: 0;
     font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .container-row.selected .container-hostname {
@@ -507,7 +523,6 @@ body {
     display: flex;
     gap: 0.25rem;
     flex-wrap: wrap;
-    justify-content: flex-end;
 }
 
 .tag-chip {
@@ -521,7 +536,10 @@ body {
 
 /* Runner: playbook picker modal */
 
-#playbook-modal {
+/* [open] matters here: a plain #playbook-modal rule would override the browser's own
+   dialog:not([open]) { display: none } and force the dialog to render inline in normal document
+   flow even while closed, instead of staying hidden until runner.js calls showModal(). */
+#playbook-modal[open] {
     width: 720px;
     max-width: 92vw;
     max-height: 80vh;

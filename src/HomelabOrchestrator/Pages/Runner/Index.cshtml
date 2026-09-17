@@ -84,15 +84,20 @@ else
                         @foreach (var container in Model.Targets.RunningContainers)
                         {
                             <label class="container-row" data-hostname="@container.Hostname" data-tags="@string.Join(",", container.Tags)">
-                                <input type="checkbox" class="container-checkbox" value="@container.Hostname" />
-                                <span class="status-dot" aria-hidden="true"></span>
-                                <span class="container-hostname">@container.Hostname</span>
-                                <span class="container-tags">
-                                    @foreach (var tag in container.Tags)
-                                    {
-                                        <span class="tag-chip">@tag</span>
-                                    }
-                                </span>
+                                <div class="container-row-main">
+                                    <input type="checkbox" class="container-checkbox" value="@container.Hostname" />
+                                    <span class="status-dot" aria-hidden="true"></span>
+                                    <span class="container-hostname">@container.Hostname</span>
+                                </div>
+                                @if (container.Tags.Count > 0)
+                                {
+                                    <div class="container-tags">
+                                        @foreach (var tag in container.Tags)
+                                        {
+                                            <span class="tag-chip">@tag</span>
+                                        }
+                                    </div>
+                                }
                             </label>
                         }
                     </div>
