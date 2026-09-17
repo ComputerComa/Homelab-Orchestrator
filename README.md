@@ -489,6 +489,17 @@ free-text command or path ever accepted from the browser:
   Captured output is rendered with plain Razor interpolation (auto HTML-encoded), never
   `Html.Raw`. A run that exceeds `Ansible:TimeoutSeconds` is killed (with its full process tree)
   and the job fails.
+- **Output is shown structured, not as one flat scrolling stream.** `AnsibleOutputParser`
+  (`Services/Ansible/AnsibleOutputParser.cs`) re-parses the job's captured output on every render
+  into per-host, per-task results: a collapsible section per host (`<details>`, no JavaScript),
+  collapsed by default and auto-expanded only when that host has a failed or unreachable step,
+  with each step showing a spinner while still in progress, a check once it completes, or an X on
+  failure/unreachable, plus any `msg` text a task reported. Once `ansible-playbook` prints its
+  `PLAY RECAP`, a summary table (Ok/Changed/Unreachable/Failed/Skipped per host) appears below the
+  host sections. This is a best-effort parser of Ansible's own *default* plain-text stdout — not a
+  custom callback plugin — so an output shape it doesn't recognize simply isn't broken out into
+  steps; it's never lost, since the full raw output is still available (just collapsed by default)
+  underneath the structured view.
 - **The SSH connectivity check** (`ansible/playbooks/ssh-check.yml`) is a safe, read-only
   playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
   container is reachable over SSH before running anything else against it; it makes no changes.
