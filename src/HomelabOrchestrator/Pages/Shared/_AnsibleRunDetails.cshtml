@@ -1,0 +1,53 @@
+@model HomelabOrchestrator.Models.AnsibleRunParsedState
+
+@foreach (var host in Model.Hosts)
+{
+    <details class="host-section @(host.HasFailure ? "host-failed" : "")" open="@host.HasFailure">
+        <summary>
+            <strong>@host.Hostname</strong>
+            <span class="muted">(@host.Steps.Count)</span>
+        </summary>
+        <ul class="step-list">
+            @foreach (var step in host.Steps)
+            {
+                <li class="step step-@step.Status.ToString().ToLowerInvariant()">
+                    <span class="step-icon" aria-hidden="true"></span>
+                    <span class="step-task">@step.TaskName</span>
+                    @if (!string.IsNullOrEmpty(step.Detail))
+                    {
+                        <span class="step-detail">@step.Detail</span>
+                    }
+                </li>
+            }
+        </ul>
+    </details>
+}
+
+@if (Model.Recap.Count > 0)
+{
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Host</th>
+                <th>Ok</th>
+                <th>Changed</th>
+                <th>Unreachable</th>
+                <th>Failed</th>
+                <th>Skipped</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var recap in Model.Recap)
+            {
+                <tr class="@(recap.HasFailure ? "recap-failed" : "")">
+                    <td>@recap.Hostname</td>
+                    <td>@recap.Ok</td>
+                    <td>@recap.Changed</td>
+                    <td>@recap.Unreachable</td>
+                    <td>@recap.Failed</td>
+                    <td>@recap.Skipped</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}

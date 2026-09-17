@@ -206,6 +206,21 @@ translated to Ansible group names with `AnsibleGroupName`, which must keep match
 `keyed_groups` sanitization (`[^A-Za-z0-9_]` -> `_`) so `--limit` matches the live inventory
 plugin's groups.
 
+`AnsibleOutputParser` (`Services/Ansible/AnsibleOutputParser.cs`) turns a job's captured
+`ansible-playbook` stdout/stderr into the per-host, per-task view `_RunJobStatus.cshtml` renders.
+It is pure and stateless — `string -> AnsibleRunParsedState`, called fresh on every render (every
+~1s poll while a job is running, once more on its terminal render) — and is never persisted onto
+`AnsibleRunJob` or wired into `AnsibleRunWorker`/`AnsibleProcessRunner`/the job store; the parsed
+view is a read-time projection of the same `Output` string the job already accumulates. It's a
+best-effort regex parser of Ansible's own default ("linear" strategy) plain-text callback output,
+not a custom callback plugin — an unrecognized line is ignored rather than breaking the parse, and
+the full raw output stays available underneath as a fallback. A host's synthetic `Running`
+placeholder step is only ever added for the second and later tasks, and never for a host already
+recorded as failed/unreachable in an earlier task — Ansible's own linear strategy runs every host
+through a task together before any host starts the next one, except a host that already
+failed/became unreachable, which is excluded from every later task for the rest of the play; don't
+"fix" this into showing a spinner for a host that will never run that task.
+
 ## Authentication
 
 The app supports exactly one operator account. There is no self-registration page and no

@@ -1,3 +1,4 @@
+@using HomelabOrchestrator.Services.Ansible
 @using HomelabOrchestrator.Services.Jobs
 @model AnsibleRunJob
 
@@ -10,12 +11,20 @@
     };
 }
 
+@{
+    var parsed = AnsibleOutputParser.Parse(Model.Output);
+}
+
 @if (Model.Stage == AnsibleRunStage.Succeeded)
 {
     <div id="job-status" class="banner banner-success">
         <h2>Playbook finished</h2>
         <p><strong>@Model.Request.PlaybookName</strong> completed successfully (exit code @Model.ExitCode).</p>
-        <pre class="run-output">@Model.Output</pre>
+        <partial name="_AnsibleRunDetails" model="parsed" />
+        <details class="raw-output-toggle">
+            <summary>Full raw output</summary>
+            <pre class="run-output">@Model.Output</pre>
+        </details>
     </div>
 }
 else if (Model.Stage == AnsibleRunStage.Failed)
@@ -23,7 +32,11 @@ else if (Model.Stage == AnsibleRunStage.Failed)
     <div id="job-status" class="banner banner-error">
         <h2>Playbook failed</h2>
         <p>@Model.Error</p>
-        <pre class="run-output">@Model.Output</pre>
+        <partial name="_AnsibleRunDetails" model="parsed" />
+        <details class="raw-output-toggle">
+            <summary>Full raw output</summary>
+            <pre class="run-output">@Model.Output</pre>
+        </details>
     </div>
 }
 else
@@ -38,9 +51,13 @@ else
          hx-swap="outerHTML">
         <h2>@StageLabel(Model.Stage)</h2>
         <p class="muted">Job <code>@Model.Id</code></p>
+        <partial name="_AnsibleRunDetails" model="parsed" />
         @if (!string.IsNullOrEmpty(Model.Output))
         {
-            <pre class="run-output">@Model.Output</pre>
+            <details class="raw-output-toggle">
+                <summary>Full raw output</summary>
+                <pre class="run-output">@Model.Output</pre>
+            </details>
         }
     </div>
 }
