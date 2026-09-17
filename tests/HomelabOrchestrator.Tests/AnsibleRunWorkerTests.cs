@@ -18,7 +18,7 @@ public class AnsibleRunWorkerTests
     [Fact]
     public async Task All_target_runs_with_no_limit_and_succeeds()
     {
-        var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0);
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
 
@@ -30,7 +30,7 @@ public class AnsibleRunWorkerTests
     [Fact]
     public async Task Vm_target_resolves_the_hostname_as_the_limit()
     {
-        var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0);
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Vm, "web-01"));
 
@@ -41,7 +41,7 @@ public class AnsibleRunWorkerTests
     [Fact]
     public async Task Vm_target_fails_without_running_the_process_when_the_container_is_not_currently_running()
     {
-        var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0);
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Vm, "db-01"));
 
@@ -57,7 +57,7 @@ public class AnsibleRunWorkerTests
         {
             new(150, Environment.MachineName, "running", []),
         };
-        var (worker, store, queue, process) = Build(containers, exitCode: 0);
+        var (worker, store, queue, process, _) = Build(containers, exitCode: 0);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Vm, Environment.MachineName));
 
@@ -69,7 +69,7 @@ public class AnsibleRunWorkerTests
     [Fact]
     public async Task TagGroup_target_resolves_to_the_sanitized_group_name()
     {
-        var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0);
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.TagGroup, "mqtt"));
 
@@ -80,7 +80,7 @@ public class AnsibleRunWorkerTests
     [Fact]
     public async Task TagGroup_target_fails_without_running_the_process_when_no_running_container_has_the_tag()
     {
-        var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0);
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.TagGroup, "nope"));
 
@@ -92,31 +92,33 @@ public class AnsibleRunWorkerTests
     [Fact]
     public async Task Unknown_playbook_fails_without_running_the_process()
     {
-        var (worker, store, queue, process) = Build(RunningContainers, exitCode: 0, catalogHasPlaybook: false);
+        var (worker, store, queue, process, executions) = Build(RunningContainers, exitCode: 0, catalogHasPlaybook: false);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("does-not-exist", AnsibleRunTargetKind.All, null));
 
         Assert.Equal(AnsibleRunStage.Failed, job.Stage);
         Assert.Contains("no longer available", job.Error);
         Assert.False(process.WasInvoked);
+        Assert.Equal([AnsibleRunStage.Running, AnsibleRunStage.Failed], executions.Saved.Select(j => j.Stage));
     }
 
     [Fact]
     public async Task Nonzero_exit_code_fails_the_job_and_records_the_exit_code()
     {
-        var (worker, store, queue, _) = Build(RunningContainers, exitCode: 2);
+        var (worker, store, queue, _, executions) = Build(RunningContainers, exitCode: 2);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
 
         Assert.Equal(AnsibleRunStage.Failed, job.Stage);
         Assert.Equal(2, job.ExitCode);
         Assert.Contains("exited with code 2", job.Error);
+        Assert.Equal([AnsibleRunStage.Running, AnsibleRunStage.Failed], executions.Saved.Select(j => j.Stage));
     }
 
     [Fact]
     public async Task Output_lines_accumulate_on_the_job_as_they_are_produced()
     {
-        var (worker, store, queue, _) = Build(RunningContainers, exitCode: 0, outputLines: ["PLAY [x]", "ok: [web-01]"]);
+        var (worker, store, queue, _, _) = Build(RunningContainers, exitCode: 0, outputLines: ["PLAY [x]", "ok: [web-01]"]);
 
         var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
 
@@ -124,7 +126,18 @@ public class AnsibleRunWorkerTests
         Assert.Contains("ok: [web-01]", job.Output);
     }
 
-    private static (AnsibleRunWorker Worker, InMemoryAnsibleRunJobStore Store, AnsibleRunJobQueue Queue, FakeProcessRunner Process) Build(
+    [Fact]
+    public async Task Successful_run_persists_a_running_snapshot_then_a_succeeded_terminal_snapshot()
+    {
+        var (worker, store, queue, _, executions) = Build(RunningContainers, exitCode: 0);
+
+        var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
+
+        Assert.Equal([AnsibleRunStage.Running, AnsibleRunStage.Succeeded], executions.Saved.Select(j => j.Stage));
+        Assert.All(executions.Saved, saved => Assert.Equal(job.Id, saved.Id));
+    }
+
+    private static (AnsibleRunWorker Worker, InMemoryAnsibleRunJobStore Store, AnsibleRunJobQueue Queue, FakeProcessRunner Process, FakeAnsibleExecutionStore Executions) Build(
         IReadOnlyList<ContainerSummary> containers, int exitCode, bool catalogHasPlaybook = true, IReadOnlyList<string>? outputLines = null)
     {
         var store = new InMemoryAnsibleRunJobStore();
@@ -132,9 +145,10 @@ public class AnsibleRunWorkerTests
         var catalog = new FakeCatalog(catalogHasPlaybook);
         var proxmox = new FakeProxmoxService(containers);
         var process = new FakeProcessRunner(exitCode, outputLines ?? []);
+        var executions = new FakeAnsibleExecutionStore();
 
-        var worker = new AnsibleRunWorker(queue, store, catalog, proxmox, process, NullLogger<AnsibleRunWorker>.Instance);
-        return (worker, store, queue, process);
+        var worker = new AnsibleRunWorker(queue, store, catalog, proxmox, process, executions, NullLogger<AnsibleRunWorker>.Instance);
+        return (worker, store, queue, process, executions);
     }
 
     private static async Task<AnsibleRunJob> RunAsync(

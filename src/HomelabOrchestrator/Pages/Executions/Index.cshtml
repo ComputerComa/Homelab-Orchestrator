@@ -1,0 +1,59 @@
+@page
+@using HomelabOrchestrator.Services.Ansible
+@model IndexModel
+
+@functions {
+    static string FormatDuration(AnsibleExecutionRecord record)
+    {
+        if (record.CompletedAtUtc is not { } completed)
+        {
+            return "-";
+        }
+
+        var elapsed = completed - record.CreatedAtUtc;
+        return elapsed.TotalHours >= 1 ? elapsed.ToString(@"h\:mm\:ss") : elapsed.ToString(@"m\:ss");
+    }
+}
+
+<h2>Job history</h2>
+
+@if (Model.Executions.Count == 0)
+{
+    <div class="banner">
+        <h2>No runs yet</h2>
+        <p>Playbook runs submitted from the <a href="/Runner">Ansible Runner</a> page will show up here.</p>
+    </div>
+}
+else
+{
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Started</th>
+                <th>Playbook</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Exit code</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var execution in Model.Executions)
+            {
+                <tr>
+                    <td><a href="/Executions/Details/@execution.Id">@execution.CreatedAtUtc.ToLocalTime().ToString("g")</a></td>
+                    <td>@execution.PlaybookName</td>
+                    <td>@AnsibleRunTargetDescription.Describe(execution.TargetKind, execution.TargetValue)</td>
+                    <td><span class="status-badge status-badge-@execution.Stage.ToString().ToLowerInvariant()">@execution.Stage</span></td>
+                    <td>@FormatDuration(execution)</td>
+                    <td>@(execution.ExitCode?.ToString() ?? "-")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    @if (Model.Executions.Count == IndexModel.Limit)
+    {
+        <p class="muted">Showing the most recent @IndexModel.Limit runs.</p>
+    }
+}

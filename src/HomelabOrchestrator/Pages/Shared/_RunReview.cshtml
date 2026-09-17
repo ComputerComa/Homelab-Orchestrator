@@ -1,17 +1,8 @@
-@using HomelabOrchestrator.Services.Jobs
+@using HomelabOrchestrator.Services.Ansible
 @model RunFormModel
 
-@functions {
-    static string DescribeTarget(RunFormModel form)
-    {
-        var (kind, value) = form.ParseTarget();
-        return kind switch
-        {
-            AnsibleRunTargetKind.Vm => $"container \"{value}\"",
-            AnsibleRunTargetKind.TagGroup => $"containers tagged \"{value}\"",
-            _ => "all running containers",
-        };
-    }
+@{
+    var (targetKind, targetValue) = Model.ParseTarget();
 }
 
 <div class="card">
@@ -19,7 +10,7 @@
 
     <dl class="fact-list">
         <dt>Playbook</dt><dd>@Model.PlaybookName</dd>
-        <dt>Target</dt><dd>@DescribeTarget(Model)</dd>
+        <dt>Target</dt><dd>@AnsibleRunTargetDescription.Describe(targetKind, targetValue)</dd>
     </dl>
 
     <form method="post"

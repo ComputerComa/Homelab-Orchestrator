@@ -61,7 +61,14 @@ builder.Services
 
 var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? $"Data Source={Path.Combine(builder.Environment.ContentRootPath, "homelab-orchestrator.db")}";
-builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(connectionString));
+
+// Registering AddDbContext and AddDbContextFactory separately for the same context conflicts
+// (both would register DbContextOptions<ApplicationDbContext>, at different lifetimes). Instead,
+// the factory is the only real registration; the scoped ApplicationDbContext that ASP.NET Core
+// Identity's stores need is just "ask the factory for one" — and EfAnsibleExecutionStore (below,
+// a singleton) uses the same factory directly to open a short-lived context per call.
+builder.Services.AddDbContextFactory<ApplicationDbContext>(options => options.UseSqlite(connectionString));
+builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContext());
 
 builder.Services.AddHttpContextAccessor();
 
@@ -138,6 +145,7 @@ builder.Services.AddSingleton<IPlaybookCatalog, PlaybookCatalog>();
 builder.Services.AddSingleton<IAnsibleProcessRunner, AnsibleProcessRunner>();
 builder.Services.AddSingleton<IAnsibleRunJobStore, InMemoryAnsibleRunJobStore>();
 builder.Services.AddSingleton<IAnsibleRunJobQueue, AnsibleRunJobQueue>();
+builder.Services.AddSingleton<IAnsibleExecutionStore, EfAnsibleExecutionStore>();
 builder.Services.AddHostedService<AnsibleRunWorker>();
 builder.Services.AddSingleton<IAnsibleRunnerService, AnsibleRunnerService>();
 

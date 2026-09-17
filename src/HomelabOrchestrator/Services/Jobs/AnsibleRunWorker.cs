@@ -15,6 +15,7 @@ public class AnsibleRunWorker(
     IPlaybookCatalog catalog,
     IProxmoxService proxmox,
     IAnsibleProcessRunner processRunner,
+    IAnsibleExecutionStore executions,
     ILogger<AnsibleRunWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -35,7 +36,8 @@ public class AnsibleRunWorker(
 
         try
         {
-            store.Update(jobId, j => j with { Stage = AnsibleRunStage.Running });
+            var running = store.Update(jobId, j => j with { Stage = AnsibleRunStage.Running });
+            await executions.SaveAsync(running, cancellationToken);
 
             var playbookPath = await catalog.ResolvePathAsync(job.Request.PlaybookName, cancellationToken);
             if (playbookPath is null)
@@ -51,13 +53,17 @@ public class AnsibleRunWorker(
                 line => store.Update(jobId, j => j with { Output = j.Output + line + "\n" }),
                 cancellationToken);
 
-            store.Update(jobId, j => j with
+            var finished = store.Update(jobId, j => j with
             {
                 Stage = exitCode == 0 ? AnsibleRunStage.Succeeded : AnsibleRunStage.Failed,
                 ExitCode = exitCode,
                 Error = exitCode == 0 ? null : $"ansible-playbook exited with code {exitCode}.",
                 CompletedAtUtc = DateTimeOffset.UtcNow,
             });
+
+            // CancellationToken.None: a run that finishes right as the app is shutting down should
+            // still get its history entry written, not lose it to the worker's stopping token.
+            await executions.SaveAsync(finished, CancellationToken.None);
 
             logger.LogInformation("Ansible run {JobId} finished with exit code {ExitCode}", jobId, exitCode);
         }
@@ -76,12 +82,14 @@ public class AnsibleRunWorker(
                 logger.LogError(ex, "Ansible run {JobId} failed unexpectedly", jobId);
             }
 
-            store.Update(jobId, j => j with
+            var failed = store.Update(jobId, j => j with
             {
                 Stage = AnsibleRunStage.Failed,
                 Error = sanitized,
                 CompletedAtUtc = DateTimeOffset.UtcNow,
             });
+
+            await executions.SaveAsync(failed, CancellationToken.None);
         }
     }
 

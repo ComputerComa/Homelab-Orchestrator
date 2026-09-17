@@ -42,8 +42,8 @@ Do not change these without an explicit request:
   (`/root/.ssh/authorized_keys` and `/root/.ssh/id_ed25519.pub`), never from a browser field
   or a job record; never generate, rotate, or copy the orchestrator's private key
   automatically. See [SSH key management](#ssh-key-management).
-- Use EF Core with SQLite for both ASP.NET Core Identity's user store and, once implemented,
-  execution history — one `DbContext`, not a separate store per concern.
+- Use EF Core with SQLite for both ASP.NET Core Identity's user store and persisted Ansible run
+  execution history — one `DbContext` (`ApplicationDbContext`), not a separate store per concern.
 - The app supports exactly one operator account, seeded once from config with no public
   registration page. Do not build multi-user or role-based access control without an explicit
   request. See [Authentication](#authentication).
@@ -221,6 +221,23 @@ through a task together before any host starts the next one, except a host that 
 failed/became unreachable, which is excluded from every later task for the rest of the play; don't
 "fix" this into showing a spinner for a host that will never run that task.
 
+Ansible run history is persisted via `IAnsibleExecutionStore`/`EfAnsibleExecutionStore`
+(`Services/Ansible/`), backed by `ApplicationDbContext.AnsibleExecutions` — the same `DbContext`
+Identity uses, per the fixed architectural decision above. It is separate from
+`IAnsibleRunJobStore`, which stays the in-memory hot path for the ~1s live-polling loop and is
+never touched by this change. A run is saved at most three times — enqueued (`Queued`, from
+`AnsibleRunnerService.SubmitAsync`), started (`Running`), and once more at its terminal state, both
+from `AnsibleRunWorker` — never per captured output line; only the final save carries the complete
+`Output`. `IAnsibleRunnerService.GetJobOrHistoryAsync` is the only way a page should look up a run
+by ID: it checks the in-memory store first (cheap, and holds every run from this process's
+lifetime) and only falls back to `IAnsibleExecutionStore` when not found there. `EfAnsibleExecutionStore`
+takes an `IDbContextFactory<ApplicationDbContext>`, not `ApplicationDbContext` directly, since it's
+registered as a singleton alongside the other Ansible job services and needs to open its own
+short-lived context per call. `AnsibleExecutionRecord`'s timestamps are plain UTC `DateTime`, not
+`DateTimeOffset` like `AnsibleRunJob`'s — the SQLite EF Core provider can't translate an `ORDER BY`
+over a `DateTimeOffset` column, which the `/Executions` list needs; don't change this back without
+re-checking that.
+
 ## Authentication
 
 The app supports exactly one operator account. There is no self-registration page and no
@@ -263,7 +280,10 @@ multi-user/RBAC model — do not add either without an explicit request.
 - Use bounded queues or another form of backpressure before production use.
 - Provisioning allocation must be serialized unless a proper reservation mechanism is implemented.
 - Do not use unobserved `Task.Run` calls for durable operations.
-- A process restart may interrupt in-memory jobs; document this until persistent job recovery exists.
+- A process restart may interrupt in-memory jobs; document this until persistent job recovery
+  exists. An Ansible run's history entry (`IAnsibleExecutionStore`) surviving a restart is not the
+  same thing as the run itself resuming — an interrupted run just stays in whatever stage it was
+  last saved at (typically `Running`) and is never picked back up automatically.
 
 Suggested provisioning stages:
 

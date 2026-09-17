@@ -39,14 +39,17 @@ hosts from Proxmox and generate inventory" capability Maintenance will eventuall
 A second page, the [Ansible Runner](#ansible-runner-implemented), does run `ansible-playbook`:
 an operator picks one of the playbooks committed under `ansible/playbooks/` and a target — a
 specific running container, every running container currently carrying a given Proxmox tag, or
-every running container — and a background worker runs it, streaming the captured output back
-to the page.
+every running container — and confirming navigates to that run's own page, which streams the
+captured output back live.
 
-A third page, [Reconcile](#reconcile-pre-existing-containers-implemented), finds containers that
+A third page, [Job history](#job-history-implemented), lists every past (and in-flight) Ansible
+run, persisted in SQLite, and links to each one's own live-or-historical detail page.
+
+A fourth page, [Reconcile](#reconcile-pre-existing-containers-implemented), finds containers that
 predate the orchestrator (not tagged `managed-by-orchestrator`) and offers to adopt the ones whose
 actual configured address already matches what the VMID convention expects — never guessing for
-the ones that don't. A top navigation bar (Provision / Ansible Runner / Reconcile) switches
-between all three pages.
+the ones that don't. A top navigation bar (Provision / Ansible Runner / Job History / Reconcile)
+switches between all four pages.
 
 The whole web UI requires signing in as the single seeded operator account, and the two
 inventory endpoints above are restricted to loopback callers — see
@@ -54,10 +57,12 @@ inventory endpoints above are restricted to loopback callers — see
 
 See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
 
-Maintenance and execution history (Milestones 2 and 4) are design-only — described under
-[Planned interface](#planned-interface) but not yet implemented. The playbook catalog
-(Milestone 3) is partially implemented by the Ansible Runner above; see that section for what's
-still missing (per-playbook metadata/forms and persisted execution history).
+Maintenance (Milestone 2) is design-only — described under [Planned interface](#planned-interface)
+but not yet implemented. The playbook catalog (Milestone 3) is partially implemented by the
+Ansible Runner above; see that section for what's still missing (per-playbook metadata/forms).
+Ansible run execution history, one item of Milestone 4, is now persisted in SQLite — see
+[Job history](#job-history-implemented); the rest of that milestone (cancellation/retry, retention,
+systemd packaging, health checks) remains unimplemented.
 
 ## Planned interface
 
@@ -125,6 +130,10 @@ Display current and previous operations with:
 - captured output;
 - retry actions where appropriate.
 
+Ansible playbook runs already have this, persisted in SQLite — see
+[Job history](#job-history-implemented). Provisioning runs aren't included yet, and there's no
+retry action for either kind.
+
 ## Architecture
 
 ```text
@@ -144,7 +153,7 @@ ASP.NET Core application
   |           |
   |           `-- Newly created or selected LXCs
   |
-  `-- SQLite execution history (planned)
+  `-- SQLite execution history (Ansible runs)
 ```
 
 ### Technology choices
@@ -155,7 +164,7 @@ ASP.NET Core application
 - `Corsinvest.ProxmoxVE.Api`
 - hosted background services and channels
 - Ansible Core
-- SQLite for execution history when persistence is introduced
+- SQLite for Ansible run execution history
 - native Linux binaries and systemd services
 
 ## Source-of-truth rules
@@ -481,8 +490,11 @@ free-text command or path ever accepted from the browser:
   in `inventory/orchestrator.yml`), so `--limit tag_mqtt` matches the live inventory plugin's
   groups.
 - **Execution** goes through the same job-queue/background-worker pattern as provisioning
-  (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and the
-  page polls its status over HTMX until it reaches `Succeeded` or `Failed`. `AnsibleProcessRunner`
+  (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and
+  confirming it navigates the browser straight to that run's page under
+  [Job history](#job-history-implemented) (`/Executions/{id}`), which polls its status over HTMX
+  until it reaches `Succeeded` or `Failed` — watching a run and launching one are two separate
+  screens, rather than one growing page. `AnsibleProcessRunner`
   is the only place that spawns `ansible-playbook`, via `ProcessStartInfo`/`ArgumentList` with
   `UseShellExecute = false` — `-i <Ansible:InventoryFile>`, an optional `--limit <target>`, then
   the resolved playbook path — and captures stdout/stderr line-by-line onto the job record.
@@ -503,6 +515,31 @@ free-text command or path ever accepted from the browser:
 - **The SSH connectivity check** (`ansible/playbooks/ssh-check.yml`) is a safe, read-only
   playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
   container is reachable over SSH before running anything else against it; it makes no changes.
+
+## Job history (implemented)
+
+Ansible run history is persisted in SQLite (via the same `ApplicationDbContext` Identity uses —
+one `DbContext`, not a second store) rather than only living in memory for the process's lifetime,
+and is browsable independently of launching a new run:
+
+- **`/Executions`** lists every run, most recent first (capped at the 100 most recent — a fixed
+  cap, not real pagination, matching this app's homelab scale elsewhere), with its playbook,
+  target, a status badge, duration, and exit code. Each row links to that run's own page.
+- **`/Executions/{id}`** is the "watch one run" screen — the same structured per-host/per-task
+  view and recap table the Runner page rendered inline before, now on its own page so it isn't
+  fighting the launch form for space. It transparently renders either an in-flight run (still
+  polling, from the in-memory `IAnsibleRunJobStore`) or an already-finished one loaded from SQLite,
+  including after a restart — `IAnsibleRunnerService.GetJobOrHistoryAsync` checks the in-memory
+  store first and only falls back to persisted history when a run isn't found there.
+- **What's persisted, and when:** `IAnsibleExecutionStore`/`EfAnsibleExecutionStore`
+  (`Services/Ansible/`) save a run's snapshot at most three times — when it's queued, when it
+  starts running, and once more at its terminal state — never per captured output line, so the
+  frequent output-accumulation writes that already happen every ~1s poll stay in-memory only.
+  Retention/pruning of old history isn't implemented yet (an unbounded SQLite table); see
+  Milestone 4 below.
+- The Ansible Runner page (`/Runner`) itself now only launches a run — submitting one navigates
+  the browser to its `/Executions/{id}` page rather than growing content on `/Runner` — plus shows
+  a small "Recent runs" teaser linking into the full history.
 
 ## Reconcile pre-existing containers (implemented)
 
@@ -671,7 +708,7 @@ The last three items need Ansible integration, which is a separate, larger piece
 
 ### Milestone 4: Operations hardening
 
-- [ ] Persist execution history in SQLite.
+- [x] Persist execution history in SQLite — see [Job history](#job-history-implemented).
 - [x] Add authentication and authorization — see [Authentication](#authentication-implemented).
       Scoped to a single seeded operator account with no self-registration; a multi-user/RBAC
       model was deliberately not built, since this app is meant for one operator.
