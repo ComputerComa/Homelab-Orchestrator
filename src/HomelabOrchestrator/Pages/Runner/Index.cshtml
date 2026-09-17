@@ -13,7 +13,7 @@
 }
 else
 {
-    <form method="post"
+    <form id="runner-form" method="post"
           hx-post
           hx-page="Index"
           hx-page-handler="Review"
@@ -22,74 +22,120 @@ else
           hx-indicator="#spinner"
           hx-disabled-elt="find button[type='submit']">
         @Html.AntiForgeryToken()
+        <input type="hidden" asp-for="Form.PlaybookName" id="playbook-name-input" />
+        <input type="hidden" asp-for="Form.Target" id="target-input" />
 
-        <div class="card">
-            <h2>Run a playbook</h2>
+        <div class="runner-layout">
+            <div class="runner-main">
 
-            <div class="field">
-                <label asp-for="Form.PlaybookName">Playbook</label>
-                <select asp-for="Form.PlaybookName">
-                    @foreach (var playbook in Model.Playbooks)
-                    {
-                        <option value="@playbook.Name">@playbook.Name</option>
-                    }
-                </select>
-                <span asp-validation-for="Form.PlaybookName" class="field-error"></span>
-            </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Playbook</h2>
+                        <button type="button" id="open-playbook-modal" class="btn btn-secondary btn-small">Select playbook&hellip;</button>
+                    </div>
+                    <div id="playbook-summary">
+                        <p class="muted">No playbook selected yet.</p>
+                    </div>
+                    <span asp-validation-for="Form.PlaybookName" class="field-error"></span>
+                </div>
 
-            <div class="field">
-                <label>Target</label>
-
-                <label class="target-option">
-                    <input type="radio" asp-for="Form.Target" value="all" />
-                    All running containers
-                </label>
-
-                @if (Model.Targets.RunningHostnames.Count > 0)
-                {
-                    <details class="target-group" open="@(Model.Form.Target.StartsWith("vm:", StringComparison.Ordinal))">
-                        <summary>Specific container (@Model.Targets.RunningHostnames.Count)</summary>
-                        @foreach (var hostname in Model.Targets.RunningHostnames)
-                        {
-                            <label class="target-option">
-                                <input type="radio" asp-for="Form.Target" value="vm:@hostname" />
-                                @hostname
-                            </label>
-                        }
-                    </details>
-                }
-
-                @if (Model.Targets.Tags.Count > 0)
-                {
-                    <details class="target-group" open="@(Model.Form.Target.StartsWith("tag:", StringComparison.Ordinal))">
-                        <summary>Tag group (@Model.Targets.Tags.Count)</summary>
-                        @foreach (var tag in Model.Targets.Tags)
-                        {
-                            <label class="target-option">
-                                <input type="radio" asp-for="Form.Target" value="tag:@tag" />
-                                @tag
-                            </label>
-                        }
-                    </details>
-                }
-
+                <div class="card">
+                    <div class="actions">
+                        <button type="submit" id="run-submit" class="btn btn-primary" disabled>Review</button>
+                        <span id="spinner" class="htmx-indicator">Working&hellip;</span>
+                    </div>
+                    <p id="confirm-hint" class="muted">Select a playbook and at least one container to continue.</p>
+                </div>
                 <span asp-validation-for="Form.Target" class="field-error"></span>
-                <p class="muted">
-                    Both lists are today's currently running containers — the run itself
-                    re-checks this immediately before executing, since a container's state can
-                    change between loading this page and confirming the run.
-                </p>
             </div>
 
-            <div class="actions">
-                <button type="submit" class="btn btn-primary">Review</button>
-                <span id="spinner" class="htmx-indicator">Working&hellip;</span>
+            <div class="card runner-sidebar">
+                <div class="card-header">
+                    <h2>Target containers</h2>
+                    <span id="selected-count" class="muted">0 selected</span>
+                </div>
+
+                <div class="field">
+                    <label for="tag-filter">Filter by tag</label>
+                    <div class="tag-filter-row">
+                        <select id="tag-filter">
+                            <option value="">All tags</option>
+                            @foreach (var tag in Model.Targets.Tags)
+                            {
+                                <option value="@tag">@tag</option>
+                            }
+                        </select>
+                        <button type="button" id="select-tagged" class="btn btn-secondary btn-small" disabled>Select</button>
+                    </div>
+                </div>
+
+                <div class="quick-actions">
+                    <button type="button" id="select-all-running" class="link-button">Select all running</button>
+                    <button type="button" id="clear-selection" class="link-button">Clear</button>
+                </div>
+
+                @if (Model.Targets.RunningContainers.Count == 0)
+                {
+                    <p class="muted">No running containers found.</p>
+                }
+                else
+                {
+                    <div id="container-list" class="container-list">
+                        @foreach (var container in Model.Targets.RunningContainers)
+                        {
+                            <label class="container-row" data-hostname="@container.Hostname" data-tags="@string.Join(",", container.Tags)">
+                                <input type="checkbox" class="container-checkbox" value="@container.Hostname" />
+                                <span class="status-dot" aria-hidden="true"></span>
+                                <span class="container-hostname">@container.Hostname</span>
+                                <span class="container-tags">
+                                    @foreach (var tag in container.Tags)
+                                    {
+                                        <span class="tag-chip">@tag</span>
+                                    }
+                                </span>
+                            </label>
+                        }
+                    </div>
+                    <p class="muted">Only currently running containers are listed.</p>
+                }
             </div>
         </div>
     </form>
 }
 
 <div id="result"></div>
+
+<dialog id="playbook-modal" aria-labelledby="playbook-modal-title">
+    <div class="modal-header">
+        <h2 id="playbook-modal-title">Select a playbook</h2>
+        <button type="button" id="close-playbook-modal" class="link-button" aria-label="Close">&times;</button>
+    </div>
+
+    <div class="modal-search">
+        <label for="playbook-search" class="visually-hidden">Search playbooks</label>
+        <input type="search" id="playbook-search" placeholder="Search playbooks by name&hellip;" />
+    </div>
+
+    <div class="modal-body">
+        <div id="playbook-list" class="playbook-list">
+            @foreach (var detail in Model.PlaybookDetails)
+            {
+                <button type="button" class="playbook-row" data-name="@detail.Name" data-description="@detail.Description" data-steps="@string.Join("|", detail.Steps)">
+                    <div class="playbook-row-name">@detail.Name</div>
+                    <div class="playbook-row-desc">@detail.Description</div>
+                </button>
+            }
+        </div>
+        <div id="playbook-detail" class="playbook-detail">
+            <p class="muted">Select a playbook from the list.</p>
+        </div>
+    </div>
+
+    <div class="modal-footer">
+        <button type="button" id="cancel-playbook-modal" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="use-playbook" class="btn btn-primary" disabled>Use this playbook</button>
+    </div>
+</dialog>
 
 @if (Model.RecentRuns.Count > 0)
 {
@@ -121,3 +167,5 @@ else
         </table>
     </div>
 }
+
+<script src="~/js/runner.js" asp-append-version="true"></script>

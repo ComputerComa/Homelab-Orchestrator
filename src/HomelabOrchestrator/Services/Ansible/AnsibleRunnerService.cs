@@ -14,16 +14,27 @@ public class AnsibleRunnerService(
     public Task<IReadOnlyList<PlaybookSummary>> ListPlaybooksAsync(CancellationToken cancellationToken = default) =>
         catalog.ListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<PlaybookDetail>> ListPlaybookDetailsAsync(CancellationToken cancellationToken = default)
+    {
+        var playbooks = await catalog.ListAsync(cancellationToken);
+        var details = new List<PlaybookDetail>();
+        foreach (var playbook in playbooks)
+        {
+            var detail = await catalog.GetDetailAsync(playbook.Name, cancellationToken);
+            if (detail is not null)
+            {
+                details.Add(detail);
+            }
+        }
+
+        return details;
+    }
+
     public async Task<RunTargetOptions> GetRunTargetOptionsAsync(CancellationToken cancellationToken = default)
     {
         var running = (await proxmox.ListContainersAsync(cancellationToken))
-            .Where(c => c.IsRunning && !OrchestratorSelfFilter.IsSelf(c))
-            .ToList();
-
-        var hostnames = running
-            .Select(c => c.Hostname)
-            .Where(h => !string.IsNullOrWhiteSpace(h))
-            .OrderBy(h => h, StringComparer.Ordinal)
+            .Where(c => c.IsRunning && !OrchestratorSelfFilter.IsSelf(c) && !string.IsNullOrWhiteSpace(c.Hostname))
+            .OrderBy(c => c.Hostname, StringComparer.Ordinal)
             .ToList();
 
         var tags = running
@@ -32,7 +43,7 @@ public class AnsibleRunnerService(
             .OrderBy(t => t, StringComparer.Ordinal)
             .ToList();
 
-        return new RunTargetOptions(hostnames, tags);
+        return new RunTargetOptions(running, tags);
     }
 
     public async Task<Guid> SubmitAsync(AnsibleRunRequest request, CancellationToken cancellationToken = default)

@@ -8,6 +8,9 @@ public interface IAnsibleRunnerService
 {
     Task<IReadOnlyList<PlaybookSummary>> ListPlaybooksAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Every playbook's parsed name/description/steps, for the playbook-picker modal — loaded up front since there are only ever a handful.</summary>
+    Task<IReadOnlyList<PlaybookDetail>> ListPlaybookDetailsAsync(CancellationToken cancellationToken = default);
+
     /// <summary>A non-reserving preview of currently running containers/tags for the picker. The worker re-validates before running.</summary>
     Task<RunTargetOptions> GetRunTargetOptionsAsync(CancellationToken cancellationToken = default);
 

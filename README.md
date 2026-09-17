@@ -459,36 +459,49 @@ free-text command or path ever accepted from the browser:
   a defense-in-depth check also confirms the resolved path still sits under `playbooks/`. This is
   a plain listing, not the metadata-driven catalog with per-playbook input forms described under
   [Playbook catalog](#playbook-catalog) below — every playbook here runs with no extra variables.
-- **Targets** are one of:
-  - a specific container, chosen by hostname, from every *currently running* container
-    (excluding the orchestrator's own container — see below);
-  - a tag group — every currently running container carrying a given Proxmox tag, again
-    excluding the orchestrator's own;
-  - all currently running containers except the orchestrator's own (no `--limit` at all).
 
-  Every "running containers" listing this page and its worker use — the target dropdown's
-  options, target validation immediately before a run, and the underlying inventory "All"
-  resolves against — excludes the orchestrator's own container (`OrchestratorSelfFilter`). It
-  typically runs as an LXC on the same node it manages, so without this exclusion it would be
-  offered (and, for "All", silently included) as a target for every playbook, including the SSH
-  connectivity check trying to connect back to itself.
+  Picking one happens in a modal (a native `<dialog>`, opened/closed by a small amount of vanilla
+  JS in `wwwroot/js/runner.js` — still no JS framework) rather than a flat `<select>`, so it holds
+  up as the number of playbooks grows: a search box filters a compact, independently-scrolling
+  list of names on the left, and clicking one shows its full **parsed name, description, and
+  steps** in a detail pane on the right without resizing the modal. That parsing is
+  `PlaybookMetadataParser` (`Services/Ansible/PlaybookMetadataParser.cs`) plus
+  `PlaybookCatalog.GetDetailAsync` — a line-oriented, best-effort reader of the playbook's own
+  YAML (no full YAML parser, mirroring `AnsibleOutputParser`'s style): a play's first `name:` line
+  becomes the description, and every later `name:` line becomes a step — including, for a
+  playbook that only has `roles: [...]` and no inline `tasks:` (like `apply-base.yml`), each
+  referenced role's own `tasks/main.yml`, resolved and parsed the same way. All playbooks' details
+  are loaded up front when the page loads, since there are only ever a handful.
+- **Targets** are chosen from a checkbox list of every *currently running* container (excluding
+  the orchestrator's own — see below), filterable by tag via a dropdown above the list. Two quick
+  actions populate it without touching a single checkbox — "Select all running" and, once a tag is
+  picked in the filter, "Select" next to it — and stay **live**: submitting without further manual
+  changes still submits as `all` or `tag:<tag>`, re-evaluated by the worker against whatever is
+  actually running immediately before the run starts, exactly as before. Checking or unchecking
+  even one box locks the target into a frozen, ad hoc hostname list instead (`AnsibleRunTargetKind.Selection`,
+  encoded as `RunFormModel.Target = "selection:<host1>,<host2>,..."`, resolved by
+  `AnsibleRunWorker.ResolveLimitAsync` into a comma-joined `--limit` — Ansible's own flag already
+  accepts a host list this way) — every hostname in it is still re-validated as currently running
+  immediately before the run starts, the same "never trust a stale browser value" rule as the
+  other two kinds; any that no longer is fails the job, without starting a process, naming exactly
+  which one(s).
 
-  Rather than one flat dropdown mixing containers and tags together, "Specific container" and
-  "Tag group" are separate, individually collapsible `<details>` sections (plain HTML, no
-  JavaScript) — each shows its own count and starts collapsed unless it already holds the
-  current selection. The underlying encoding is unchanged (`RunFormModel.ParseTarget()` still
-  reads a single `all` / `vm:<hostname>` / `tag:<tag>` value from one radio-button group), so
-  this is a presentation-only change.
+  Every "running containers" listing this page and its worker use — the checkbox list itself,
+  target validation immediately before a run, and the underlying inventory "All" resolves
+  against — excludes the orchestrator's own container (`OrchestratorSelfFilter`). It typically
+  runs as an LXC on the same node it manages, so without this exclusion it would be offered (and,
+  for "All", silently included) as a target for every playbook, including the SSH connectivity
+  check trying to connect back to itself.
 
-  The list is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page
-  load, but that choice is never trusted as still valid once the run actually starts: the
-  background worker (`AnsibleRunWorker`) re-fetches running containers immediately before
-  building the `ansible-playbook` command and fails the job — without starting a process — if
-  the chosen container is no longer running or no running container still carries the chosen
-  tag. A tag is translated to the same group name Ansible's own `keyed_groups` would produce
-  (`AnsibleGroupName`, e.g. tag `mqtt` -> group `tag_mqtt`, matching the `tag` prefix configured
-  in `inventory/orchestrator.yml`), so `--limit tag_mqtt` matches the live inventory plugin's
-  groups.
+  The list is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page load
+  (`RunTargetOptions.RunningContainers`, each with its own tags, for the checkbox rows and the tag
+  filter), but that choice is never trusted as still valid once the run actually starts: the
+  background worker (`AnsibleRunWorker`) re-fetches running containers immediately before building
+  the `ansible-playbook` command and fails the job — without starting a process — if a chosen
+  container is no longer running or no running container still carries a chosen tag. A tag is
+  translated to the same group name Ansible's own `keyed_groups` would produce (`AnsibleGroupName`,
+  e.g. tag `mqtt` -> group `tag_mqtt`, matching the `tag` prefix configured in
+  `inventory/orchestrator.yml`), so `--limit tag_mqtt` matches the live inventory plugin's groups.
 - **Execution** goes through the same job-queue/background-worker pattern as provisioning
   (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and
   confirming it navigates the browser straight to that run's page under

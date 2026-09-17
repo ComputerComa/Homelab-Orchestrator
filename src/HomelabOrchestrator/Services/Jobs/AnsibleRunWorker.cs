@@ -114,6 +114,28 @@ public class AnsibleRunWorker(
             return request.TargetValue;
         }
 
+        if (request.TargetKind == AnsibleRunTargetKind.Selection)
+        {
+            var hostnames = (request.TargetValue ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (hostnames.Length == 0)
+            {
+                throw new AnsibleRunException("No containers were selected.");
+            }
+
+            var runningHostnames = running.Select(c => c.Hostname).ToHashSet(StringComparer.Ordinal);
+            var missing = hostnames.Where(h => !runningHostnames.Contains(h)).ToList();
+            if (missing.Count > 0)
+            {
+                var noun = missing.Count == 1 ? "Container" : "Containers";
+                var verb = missing.Count == 1 ? "is" : "are";
+                throw new AnsibleRunException($"{noun} '{string.Join("', '", missing)}' {verb} not currently running.");
+            }
+
+            return string.Join(',', hostnames);
+        }
+
         if (running.All(c => !c.Tags.Contains(request.TargetValue)))
         {
             throw new AnsibleRunException($"No running container currently has the tag '{request.TargetValue}'.");

@@ -19,7 +19,7 @@ public class AnsibleRunnerServiceTests
 
         var targets = await service.GetRunTargetOptionsAsync();
 
-        Assert.Equal(["cache-01", "web-01"], targets.RunningHostnames);
+        Assert.Equal(["cache-01", "web-01"], targets.RunningContainers.Select(c => c.Hostname));
         Assert.Equal(["base", "mqtt"], targets.Tags);
     }
 
@@ -34,7 +34,7 @@ public class AnsibleRunnerServiceTests
 
         var targets = await service.GetRunTargetOptionsAsync();
 
-        Assert.Equal(["web-01"], targets.RunningHostnames);
+        Assert.Equal(["web-01"], targets.RunningContainers.Select(c => c.Hostname));
         Assert.Equal(["base"], targets.Tags);
     }
 
@@ -120,6 +120,17 @@ public class AnsibleRunnerServiceTests
         Assert.Equal(playbooks, await service.ListPlaybooksAsync());
     }
 
+    [Fact]
+    public async Task ListPlaybookDetailsAsync_fetches_every_catalog_playbooks_detail()
+    {
+        var playbooks = new PlaybookSummary[] { new("apply-base", "apply-base.yml"), new("ssh-check", "ssh-check.yml") };
+        var service = new AnsibleRunnerService(new FakeCatalog(playbooks), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore());
+
+        var details = await service.ListPlaybookDetailsAsync();
+
+        Assert.Equal(["apply-base", "ssh-check"], details.Select(d => d.Name));
+    }
+
     private sealed class FakeCatalog(IReadOnlyList<PlaybookSummary> playbooks) : IPlaybookCatalog
     {
         public Task<IReadOnlyList<PlaybookSummary>> ListAsync(CancellationToken cancellationToken = default) =>
@@ -127,6 +138,9 @@ public class AnsibleRunnerServiceTests
 
         public Task<string?> ResolvePathAsync(string name, CancellationToken cancellationToken = default) =>
             Task.FromResult(playbooks.Any(p => p.Name == name) ? $"/fake/{name}.yml" : null);
+
+        public Task<PlaybookDetail?> GetDetailAsync(string name, CancellationToken cancellationToken = default) =>
+            Task.FromResult(playbooks.Any(p => p.Name == name) ? new PlaybookDetail(name, name, []) : null);
     }
 
     private sealed class FakeProxmoxService(IReadOnlyList<ContainerSummary> containers) : IProxmoxService

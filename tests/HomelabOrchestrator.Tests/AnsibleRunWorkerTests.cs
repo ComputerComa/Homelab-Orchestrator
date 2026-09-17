@@ -90,6 +90,42 @@ public class AnsibleRunWorkerTests
     }
 
     [Fact]
+    public async Task Selection_target_resolves_to_a_comma_joined_limit()
+    {
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
+
+        var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Selection, "web-01"));
+
+        Assert.Equal(AnsibleRunStage.Succeeded, job.Stage);
+        Assert.Equal("web-01", process.LastLimit);
+    }
+
+    [Fact]
+    public async Task Selection_target_fails_without_running_the_process_when_one_host_is_not_currently_running()
+    {
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
+
+        var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Selection, "web-01,db-01"));
+
+        Assert.Equal(AnsibleRunStage.Failed, job.Stage);
+        Assert.Contains("db-01", job.Error);
+        Assert.Contains("not currently running", job.Error);
+        Assert.False(process.WasInvoked);
+    }
+
+    [Fact]
+    public async Task Selection_target_fails_without_running_the_process_when_empty()
+    {
+        var (worker, store, queue, process, _) = Build(RunningContainers, exitCode: 0);
+
+        var job = await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Selection, null));
+
+        Assert.Equal(AnsibleRunStage.Failed, job.Stage);
+        Assert.Contains("No containers were selected", job.Error);
+        Assert.False(process.WasInvoked);
+    }
+
+    [Fact]
     public async Task Unknown_playbook_fails_without_running_the_process()
     {
         var (worker, store, queue, process, executions) = Build(RunningContainers, exitCode: 0, catalogHasPlaybook: false);
@@ -192,6 +228,9 @@ public class AnsibleRunWorkerTests
 
         public Task<string?> ResolvePathAsync(string name, CancellationToken cancellationToken = default) =>
             Task.FromResult(hasPlaybook && name == "ssh-check" ? "/fake/ansible/playbooks/ssh-check.yml" : null);
+
+        public Task<PlaybookDetail?> GetDetailAsync(string name, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeProxmoxService(IReadOnlyList<ContainerSummary> containers) : IProxmoxService

@@ -198,13 +198,38 @@ The Ansible Runner page (`/Runner`, `Pages/Runner/`) implements this for `ansibl
 (top-level files only): `PlaybookCatalog` (`Services/Ansible/PlaybookCatalog.cs`) is the only
 component that lists playbooks and resolves a name to a path, and it only ever resolves a name
 to a path it just discovered itself — extend it rather than adding a second lookup if playbook
-discovery needs to change. Its run targets (a single running container, a Proxmox-tag group, or
-all running containers) are re-resolved against live Proxmox state inside `AnsibleRunWorker`
-immediately before building the `ansible-playbook` command — the same "never trust a stale
-browser value" rule as VMID/address/template — never inside the page model. Tag targets are
-translated to Ansible group names with `AnsibleGroupName`, which must keep matching Ansible's own
-`keyed_groups` sanitization (`[^A-Za-z0-9_]` -> `_`) so `--limit` matches the live inventory
-plugin's groups.
+discovery needs to change. Its run targets — a single running container, a Proxmox-tag group, all
+running containers, or an ad hoc checked set of them (`AnsibleRunTargetKind.Selection`, a
+comma-joined hostname list in `TargetValue`) — are re-resolved against live Proxmox state inside
+`AnsibleRunWorker.ResolveLimitAsync` immediately before building the `ansible-playbook` command —
+the same "never trust a stale browser value" rule as VMID/address/template — never inside the page
+model. Tag targets are translated to Ansible group names with `AnsibleGroupName`, which must keep
+matching Ansible's own `keyed_groups` sanitization (`[^A-Za-z0-9_]` -> `_`) so `--limit` matches
+the live inventory plugin's groups. `Selection` re-validates every listed hostname is still
+running and fails naming exactly which one(s) aren't, then joins the rest with a comma for
+`--limit` (Ansible's own flag accepts a host list this way) — never drop hosts silently to
+produce a smaller-than-requested run.
+
+The Runner page's checkbox-based target picker distinguishes "live" from "frozen" client-side: a
+quick action ("Select all running", or "Select" next to the tag filter once a tag is picked) sets
+`RunFormModel.Target` to the same `all`/`tag:<tag>` encoding as before and is meant to stay that
+way — re-evaluated at run time, not a snapshot — right up until the operator manually
+checks/unchecks any individual box, which locks it into `selection:<host1>,<host2>,...` from then
+on. This state lives entirely in `wwwroot/js/runner.js` (vanilla JS, no framework, consistent with
+the HTMX-only architectural decision) and is invisible to the page model — it only ever sees
+whatever single encoded string ends up in the hidden `Form.Target` input at submit time, exactly
+like the pre-existing `all`/`vm:`/`tag:` encodings. Don't add a distinct persisted "mode" field
+anywhere server-side; the encoding itself is the only state that needs to round-trip.
+
+`PlaybookMetadataParser` (`Services/Ansible/PlaybookMetadataParser.cs`) plus
+`PlaybookCatalog.GetDetailAsync` parse a playbook's own YAML into the name/description/steps shown
+in the Runner page's playbook-picker modal — a line-oriented, best-effort parser (no YAML library),
+mirroring `AnsibleOutputParser`'s style: pure, stateless, testable against plain strings. The
+play's first `name:` line is the description; every later `name:` line is a step, including a
+referenced role's own `tasks/main.yml` when the playbook only has `roles: [...]` (e.g.
+`apply-base.yml`) rather than inline `tasks:` — resolving that is `PlaybookCatalog`'s job (it reads
+the role's file and hands its content to the parser), not the parser's; the parser itself never
+touches the filesystem.
 
 `AnsibleOutputParser` (`Services/Ansible/AnsibleOutputParser.cs`) turns a job's captured
 `ansible-playbook` stdout/stderr into the per-host, per-task view `_RunJobStatus.cshtml` renders.
@@ -333,15 +358,19 @@ Cancelled
 
 - The application remains functional and understandable as server-rendered HTML.
 - Use HTMX for partial replacement, polling, and small interactions.
-- Do not introduce a SPA framework without an explicit request.
+- Do not introduce a SPA framework without an explicit request. A small amount of plain vanilla
+  JS (e.g. `wwwroot/js/runner.js`) is fine for client-only widget state that has nothing to do with
+  the server — a modal's open/closed state, a checkbox panel's selected-count display — as long as
+  the value that actually reaches the server is still just an ordinary form field, no different in
+  shape from one HTMX alone would produce.
 - Page actions must show pending, successful, and failed states clearly.
 - Disable or guard duplicate submissions.
 - Show the actual target host and operation before disruptive actions.
 - Keep provisioning fields minimal; infrastructure defaults belong in configuration.
 - Do not expose secret configuration values in forms.
 - The shared layout (`Pages/Shared/_Layout.cshtml`) carries a top navigation bar linking every
-  top-level page (currently Provision, Ansible Runner, and Reconcile). Add new top-level pages there rather
-  than leaving them reachable only by typing a URL.
+  top-level page (currently Provision, Ansible Runner, Job History, and Reconcile). Add new
+  top-level pages there rather than leaving them reachable only by typing a URL.
 
 ## Tests
 
