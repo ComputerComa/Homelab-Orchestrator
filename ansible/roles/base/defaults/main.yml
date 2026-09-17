@@ -1,2 +1,3 @@
 ---
-# Role defaults will be added once the base role's tasks are decided.
+base_timezone: Etc/UTC
+base_locale: en_US.UTF-8

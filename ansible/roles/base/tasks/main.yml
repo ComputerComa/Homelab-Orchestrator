@@ -1,8 +1,34 @@
 ---
-# Placeholder: the concrete base-role tasks (packages, timezone, locale, users, etc.) are not
-# decided yet. This keeps apply-base.yml runnable end-to-end against real inventory without
-# doing anything to the target host. Replace with real, idempotent tasks when the role's scope
-# is decided — see AGENTS.md's Ansible requirements.
-- name: Base role placeholder (no-op)
-  ansible.builtin.debug:
-    msg: "base role applied to {{ inventory_hostname }} — no tasks defined yet"
+# Baseline setup applied once to every newly provisioned container: keep packages current, set
+# the timezone and enable NTP, and generate/select the configured locale. `base_timezone` and
+# `base_locale` (defaults/main.yml) can be overridden without editing this file.
+- name: Update apt cache and upgrade all packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    upgrade: dist
+
+- name: Configure timezone
+  community.general.timezone:
+    name: "{{ base_timezone }}"
+
+# Debian 13 ships systemd-timesyncd by default — no separate NTP package to install. Under an
+# unprivileged LXC this may already be masked/managed by the Proxmox host, so treat this as
+# best-effort rather than a guarantee the clock syncs inside every container.
+- name: Enable and start NTP time sync
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    enabled: true
+    state: started
+
+- name: Generate the configured locale
+  community.general.locale_gen:
+    name: "{{ base_locale }}"
+    state: present
+
+- name: Set the system default locale
+  ansible.builtin.lineinfile:
+    path: /etc/default/locale
+    regexp: '^LANG='
+    line: "LANG={{ base_locale }}"
+    create: true
