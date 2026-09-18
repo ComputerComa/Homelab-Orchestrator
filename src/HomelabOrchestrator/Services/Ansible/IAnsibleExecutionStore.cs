@@ -7,8 +7,9 @@ namespace HomelabOrchestrator.Services.Ansible;
 /// Persists Ansible run history in SQLite (via <see cref="Data.ApplicationDbContext"/>) so it
 /// survives a process restart and can be browsed after the fact — the "Job services: ...
 /// persistence" boundary. This is separate from <see cref="IAnsibleRunJobStore"/>, which stays
-/// the in-memory hot path for the ~1s live-polling loop; a run is only ever saved here at its
-/// Queued, Running, and terminal transitions, never per captured output line.
+/// the in-memory hot path for the ~1s live-polling loop; the execution row itself is only ever
+/// saved here at its Queued, Running, and terminal transitions. Captured output is a separate
+/// concern, written incrementally and in batches to <see cref="IAnsibleExecutionLogStore"/>.
 /// </summary>
 public interface IAnsibleExecutionStore
 {
@@ -19,4 +20,11 @@ public interface IAnsibleExecutionStore
     Task<IReadOnlyList<AnsibleExecutionRecord>> ListRecentAsync(int limit, CancellationToken cancellationToken = default);
 
     Task<AnsibleExecutionRecord?> GetAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Marks every execution still Queued or Running as Interrupted. Call once at startup — after
+    /// a process exit, neither state can ever resolve itself, so without this an execution page
+    /// left mid-run would poll forever. Returns how many rows were changed.
+    /// </summary>
+    Task<int> InterruptStuckExecutionsAsync(CancellationToken cancellationToken = default);
 }

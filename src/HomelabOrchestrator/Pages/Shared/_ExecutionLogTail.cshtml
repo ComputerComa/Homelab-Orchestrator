@@ -1,0 +1,20 @@
+@using HomelabOrchestrator.Models
+@model HomelabOrchestrator.Pages.Executions.ExecutionLogTailViewModel
+
+@{
+    var nextAfter = Model.Entries.Count > 0 ? Model.Entries[^1].Sequence : Model.AfterSequence;
+}
+
+@foreach (var entry in Model.Entries)
+{
+    <div class="log-line log-line-@entry.Stream.ToString().ToLowerInvariant()">@entry.Text</div>
+}
+
+@if (!Model.Job.IsFinished)
+{
+    <span id="log-poll"
+          hx-get="/Executions/Details/@Model.Job.Id?handler=LogTail&after=@nextAfter"
+          hx-trigger="load delay:1s"
+          hx-target="#log-poll"
+          hx-swap="outerHTML"></span>
+}

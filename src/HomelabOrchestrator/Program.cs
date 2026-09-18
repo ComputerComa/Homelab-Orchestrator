@@ -146,6 +146,7 @@ builder.Services.AddSingleton<IAnsibleProcessRunner, AnsibleProcessRunner>();
 builder.Services.AddSingleton<IAnsibleRunJobStore, InMemoryAnsibleRunJobStore>();
 builder.Services.AddSingleton<IAnsibleRunJobQueue, AnsibleRunJobQueue>();
 builder.Services.AddSingleton<IAnsibleExecutionStore, EfAnsibleExecutionStore>();
+builder.Services.AddSingleton<IAnsibleExecutionLogStore, EfAnsibleExecutionLogStore>();
 builder.Services.AddHostedService<AnsibleRunWorker>();
 builder.Services.AddSingleton<IAnsibleRunnerService, AnsibleRunnerService>();
 
@@ -155,6 +156,16 @@ using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await dbContext.Database.MigrateAsync();
+
+    // A Queued/Running row left over from before this process started can never resolve itself —
+    // the in-memory job store that would finish it always starts empty. Without this sweep, its
+    // Executions page would poll forever after a restart.
+    var executionStore = scope.ServiceProvider.GetRequiredService<IAnsibleExecutionStore>();
+    var interruptedCount = await executionStore.InterruptStuckExecutionsAsync();
+    if (interruptedCount > 0)
+    {
+        app.Logger.LogWarning("Marked {Count} Ansible execution(s) Interrupted after a restart", interruptedCount);
+    }
 
     var userManager = scope.ServiceProvider.GetRequiredService<UserManager<IdentityUser>>();
     var adminOptions = scope.ServiceProvider.GetRequiredService<IOptions<AdminOptions>>().Value;

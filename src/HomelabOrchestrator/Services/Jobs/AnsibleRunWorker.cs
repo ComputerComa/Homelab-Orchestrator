@@ -1,3 +1,4 @@
+using HomelabOrchestrator.Models;
 using HomelabOrchestrator.Services.Ansible;
 using HomelabOrchestrator.Services.Proxmox;
 
@@ -16,6 +17,7 @@ public class AnsibleRunWorker(
     IProxmoxService proxmox,
     IAnsibleProcessRunner processRunner,
     IAnsibleExecutionStore executions,
+    IAnsibleExecutionLogStore logStore,
     ILogger<AnsibleRunWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -34,10 +36,11 @@ public class AnsibleRunWorker(
             return;
         }
 
+        AnsibleRunJob outcome;
         try
         {
-            var running = store.Update(jobId, j => j with { Stage = AnsibleRunStage.Running });
-            await executions.SaveAsync(running, cancellationToken);
+            var running = store.Update(jobId, j => j with { Stage = AnsibleRunStage.Running, StartedAtUtc = DateTimeOffset.UtcNow });
+            await SavePersistedSnapshotAsync(running, cancellationToken);
 
             var playbookPath = await catalog.ResolvePathAsync(job.Request.PlaybookName, cancellationToken);
             if (playbookPath is null)
@@ -45,15 +48,29 @@ public class AnsibleRunWorker(
                 throw new AnsibleRunException($"Playbook '{job.Request.PlaybookName}' is no longer available.");
             }
 
-            var limit = await ResolveLimitAsync(job.Request, cancellationToken);
+            var (limit, resolvedHosts) = await ResolveLimitAsync(job.Request, cancellationToken);
+            store.Update(jobId, j => j with { ResolvedTargetHostnames = resolvedHosts });
 
-            var exitCode = await processRunner.RunPlaybookAsync(
-                playbookPath,
-                limit,
-                line => store.Update(jobId, j => j with { Output = j.Output + line + "\n" }),
-                cancellationToken);
+            var logBuffer = new AnsibleExecutionLogBuffer(jobId, logStore, logger);
+            store.AttachLiveLog(jobId, logBuffer);
+            var flushLoop = logBuffer.RunFlushLoopAsync(cancellationToken);
+            int exitCode;
+            try
+            {
+                exitCode = await processRunner.RunPlaybookAsync(
+                    playbookPath,
+                    limit,
+                    (stream, line) => logBuffer.Enqueue(stream, line),
+                    cancellationToken);
+            }
+            finally
+            {
+                logBuffer.Complete();
+                await flushLoop;
+                store.DetachLiveLog(jobId);
+            }
 
-            var finished = store.Update(jobId, j => j with
+            outcome = store.Update(jobId, j => j with
             {
                 Stage = exitCode == 0 ? AnsibleRunStage.Succeeded : AnsibleRunStage.Failed,
                 ExitCode = exitCode,
@@ -61,43 +78,77 @@ public class AnsibleRunWorker(
                 CompletedAtUtc = DateTimeOffset.UtcNow,
             });
 
-            // CancellationToken.None: a run that finishes right as the app is shutting down should
-            // still get its history entry written, not lose it to the worker's stopping token.
-            await executions.SaveAsync(finished, CancellationToken.None);
-
             logger.LogInformation("Ansible run {JobId} finished with exit code {ExitCode}", jobId, exitCode);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = store.Update(jobId, j => j with
+            {
+                Stage = AnsibleRunStage.Interrupted,
+                Error = "The orchestrator is shutting down.",
+                CompletedAtUtc = DateTimeOffset.UtcNow,
+            });
+            logger.LogWarning("Ansible run {JobId} interrupted by application shutdown", jobId);
+        }
+        catch (TimeoutException ex)
+        {
+            outcome = store.Update(jobId, j => j with
+            {
+                Stage = AnsibleRunStage.TimedOut,
+                Error = ex.Message,
+                CompletedAtUtc = DateTimeOffset.UtcNow,
+            });
+            logger.LogWarning("Ansible run {JobId} timed out: {Message}", jobId, ex.Message);
+        }
+        catch (AnsibleRunException ex)
+        {
+            outcome = store.Update(jobId, j => j with
+            {
+                Stage = AnsibleRunStage.Failed,
+                Error = ex.Message,
+                CompletedAtUtc = DateTimeOffset.UtcNow,
+            });
+            logger.LogWarning("Ansible run {JobId} failed: {Message}", jobId, ex.Message);
         }
         catch (Exception ex)
         {
-            var sanitized = ex is AnsibleRunException or TimeoutException
-                ? ex.Message
-                : "An unexpected error occurred while running the playbook. See the server log for details.";
-
-            if (ex is AnsibleRunException or TimeoutException)
-            {
-                logger.LogWarning("Ansible run {JobId} failed: {Message}", jobId, sanitized);
-            }
-            else
-            {
-                logger.LogError(ex, "Ansible run {JobId} failed unexpectedly", jobId);
-            }
-
-            var failed = store.Update(jobId, j => j with
+            outcome = store.Update(jobId, j => j with
             {
                 Stage = AnsibleRunStage.Failed,
-                Error = sanitized,
+                Error = "An unexpected error occurred while running the playbook. See the server log for details.",
                 CompletedAtUtc = DateTimeOffset.UtcNow,
             });
+            logger.LogError(ex, "Ansible run {JobId} failed unexpectedly", jobId);
+        }
 
-            await executions.SaveAsync(failed, CancellationToken.None);
+        // Deliberately outside every catch above: a persistence failure here can only log, never
+        // retroactively change `outcome`'s already-committed in-memory Stage, and can never escape
+        // to crash the worker's outer await-foreach loop. CancellationToken.None: a run that
+        // finishes right as the app is shutting down should still get its history entry written.
+        await SavePersistedSnapshotAsync(outcome, CancellationToken.None);
+    }
+
+    private async Task SavePersistedSnapshotAsync(AnsibleRunJob job, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await executions.SaveAsync(job, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to persist execution history for Ansible run {JobId} (stage {Stage})", job.Id, job.Stage);
         }
     }
 
-    private async Task<string?> ResolveLimitAsync(AnsibleRunRequest request, CancellationToken cancellationToken)
+    private async Task<(string? Limit, IReadOnlyList<string> ResolvedHosts)> ResolveLimitAsync(AnsibleRunRequest request, CancellationToken cancellationToken)
     {
         if (request.TargetKind == AnsibleRunTargetKind.All)
         {
-            return null;
+            var everyone = (await proxmox.ListContainersAsync(cancellationToken))
+                .Where(c => c.IsRunning && !OrchestratorSelfFilter.IsSelf(c))
+                .Select(c => c.Hostname)
+                .ToList();
+            return (null, everyone);
         }
 
         var running = (await proxmox.ListContainersAsync(cancellationToken))
@@ -111,7 +162,7 @@ public class AnsibleRunWorker(
                 throw new AnsibleRunException($"Container '{request.TargetValue}' is not currently running.");
             }
 
-            return request.TargetValue;
+            return (request.TargetValue, [request.TargetValue!]);
         }
 
         if (request.TargetKind == AnsibleRunTargetKind.Selection)
@@ -133,14 +184,15 @@ public class AnsibleRunWorker(
                 throw new AnsibleRunException($"{noun} '{string.Join("', '", missing)}' {verb} not currently running.");
             }
 
-            return string.Join(',', hostnames);
+            return (string.Join(',', hostnames), hostnames);
         }
 
-        if (running.All(c => !c.Tags.Contains(request.TargetValue)))
+        var tagged = running.Where(c => c.Tags.Contains(request.TargetValue)).ToList();
+        if (tagged.Count == 0)
         {
             throw new AnsibleRunException($"No running container currently has the tag '{request.TargetValue}'.");
         }
 
-        return AnsibleGroupName.ForTag(request.TargetValue!);
+        return (AnsibleGroupName.ForTag(request.TargetValue!), tagged.Select(c => c.Hostname).ToList());
     }
 }

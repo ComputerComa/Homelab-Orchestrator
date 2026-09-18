@@ -231,37 +231,69 @@ referenced role's own `tasks/main.yml` when the playbook only has `roles: [...]`
 the role's file and hands its content to the parser), not the parser's; the parser itself never
 touches the filesystem.
 
-`AnsibleOutputParser` (`Services/Ansible/AnsibleOutputParser.cs`) turns a job's captured
-`ansible-playbook` stdout/stderr into the per-host, per-task view `_RunJobStatus.cshtml` renders.
-It is pure and stateless — `string -> AnsibleRunParsedState`, called fresh on every render (every
-~1s poll while a job is running, once more on its terminal render) — and is never persisted onto
-`AnsibleRunJob` or wired into `AnsibleRunWorker`/`AnsibleProcessRunner`/the job store; the parsed
-view is a read-time projection of the same `Output` string the job already accumulates. It's a
-best-effort regex parser of Ansible's own default ("linear" strategy) plain-text callback output,
-not a custom callback plugin — an unrecognized line is ignored rather than breaking the parse, and
-the full raw output stays available underneath as a fallback. A host's synthetic `Running`
-placeholder step is only ever added for the second and later tasks, and never for a host already
-recorded as failed/unreachable in an earlier task — Ansible's own linear strategy runs every host
-through a task together before any host starts the next one, except a host that already
-failed/became unreachable, which is excluded from every later task for the rest of the play; don't
-"fix" this into showing a spinner for a host that will never run that task.
+`AnsibleOutputParser` (`Services/Ansible/AnsibleOutputParser.cs`) turns a run's reconstructed
+`ansible-playbook` stdout/stderr into the structured view the Executions detail page renders. It is
+pure and stateless — `string -> AnsibleRunParsedState`, called fresh on every render (the initial
+page load and each of the Tasks/Hosts/header-status HTMX fragments' own polls) — and the parsed
+result is never itself persisted; `IAnsibleRunnerService.GetReconstructedOutputAsync` is what
+supplies its input text (see below), not a field on `AnsibleRunJob` (which no longer carries raw
+output at all). `AnsibleRunParsedState` exposes both a host-centric projection (`Hosts`, one
+section per host) and a task-centric one (`Tasks`, one row per task aggregating every host's
+result for it) built from the same underlying per-host/per-task data in one pass — don't
+reparse for one after computing the other. It's a best-effort regex parser of Ansible's own
+default ("linear" strategy) plain-text callback output, not a custom callback plugin — an
+unrecognized line is ignored rather than breaking the parse, and the full raw output stays
+available underneath as a fallback. A host's synthetic `Running` placeholder step is only ever
+added for the second and later tasks, and never for a host already recorded as failed/unreachable
+in an earlier task — Ansible's own linear strategy runs every host through a task together before
+any host starts the next one, except a host that already failed/became unreachable, which is
+excluded from every later task for the rest of the play; don't "fix" this into showing a spinner
+for a host that will never run that task. A looped task's repeated per-item result lines (`ok:
+[host] => (item=...)`) are distinguished via `AnsibleTaskStep.LoopItem`, not left as
+indistinguishable duplicate steps — extend `LoopItemRegex`/`RecordStep` together if Ansible's own
+item-marker format ever needs broader coverage.
 
-Ansible run history is persisted via `IAnsibleExecutionStore`/`EfAnsibleExecutionStore`
-(`Services/Ansible/`), backed by `ApplicationDbContext.AnsibleExecutions` — the same `DbContext`
-Identity uses, per the fixed architectural decision above. It is separate from
-`IAnsibleRunJobStore`, which stays the in-memory hot path for the ~1s live-polling loop and is
-never touched by this change. A run is saved at most three times — enqueued (`Queued`, from
-`AnsibleRunnerService.SubmitAsync`), started (`Running`), and once more at its terminal state, both
-from `AnsibleRunWorker` — never per captured output line; only the final save carries the complete
-`Output`. `IAnsibleRunnerService.GetJobOrHistoryAsync` is the only way a page should look up a run
-by ID: it checks the in-memory store first (cheap, and holds every run from this process's
-lifetime) and only falls back to `IAnsibleExecutionStore` when not found there. `EfAnsibleExecutionStore`
-takes an `IDbContextFactory<ApplicationDbContext>`, not `ApplicationDbContext` directly, since it's
-registered as a singleton alongside the other Ansible job services and needs to open its own
-short-lived context per call. `AnsibleExecutionRecord`'s timestamps are plain UTC `DateTime`, not
-`DateTimeOffset` like `AnsibleRunJob`'s — the SQLite EF Core provider can't translate an `ORDER BY`
-over a `DateTimeOffset` column, which the `/Executions` list needs; don't change this back without
-re-checking that.
+Ansible run history and output are both durably persisted, in two different tables for two
+different access patterns. `IAnsibleExecutionStore`/`EfAnsibleExecutionStore` (`Services/Ansible/`)
+own the execution row itself (`ApplicationDbContext.AnsibleExecutions` — the same `DbContext`
+Identity uses, per the fixed architectural decision above), separate from `IAnsibleRunJobStore`,
+which stays the in-memory hot path for live polling and is never touched by this change. The
+execution row is still saved a small, bounded number of times per run — enqueued (`Queued`, from
+`AnsibleRunnerService.SubmitAsync`), started (`Running`), and once more at its terminal state, all
+from `AnsibleRunWorker` — never per captured output line. Captured output itself is a separate
+concern: `IAnsibleExecutionLogStore`/`EfAnsibleExecutionLogStore` own the append-only, per-line
+`AnsibleExecutionLog` table (execution ID, a strictly increasing per-execution `Sequence`,
+timestamp, `stdout`/`stderr` stream, text), written in batches by `AnsibleExecutionLogBuffer`
+(`Services/Jobs/`) — flushed whenever ~40 lines accumulate or ~300ms elapse, whichever first, with
+a guaranteed final flush when the run ends — never one row per line either. Since
+`AnsibleRunWorker`'s job queue is read by a single sequential loop, only one execution is ever
+live at a time, so the buffer is a plain object scoped to one `ProcessAsync` call, not a
+per-execution registry; `IAnsibleRunJobStore.AttachLiveLog`/`GetLiveLogSnapshot` are how a page
+reaches that one live buffer's in-memory text without a DB round trip while a run is in flight.
+`IAnsibleRunnerService.GetReconstructedOutputAsync` is the single place that unifies all of this
+for a page: the live buffer's snapshot if the run is still in flight, else the log table, else (for
+a row persisted before the log table existed) the legacy `AnsibleExecutionRecord.Output` column,
+which is now nullable and never written by new code — don't resurrect writes to it.
+`IAnsibleRunnerService.GetJobOrHistoryAsync` is still the only way a page should look up a run by
+ID: it checks the in-memory store first (cheap, and holds every run from this process's lifetime)
+and only falls back to `IAnsibleExecutionStore` when not found there. `EfAnsibleExecutionStore`/
+`EfAnsibleExecutionLogStore` both take an `IDbContextFactory<ApplicationDbContext>`, not
+`ApplicationDbContext` directly, since they're registered as singletons alongside the other Ansible
+job services and need to open their own short-lived context per call. `AnsibleExecutionRecord`'s
+and `AnsibleExecutionLog`'s timestamps are plain UTC `DateTime`, not `DateTimeOffset` like
+`AnsibleRunJob`'s — the SQLite EF Core provider can't translate an `ORDER BY` over a
+`DateTimeOffset` column, which both the `/Executions` list and the log table's cursor query need;
+don't change this back without re-checking that.
+
+The Executions detail page (`Pages/Executions/Details.cshtml`) polls four independent small HTMX
+fragments instead of replacing the whole page — a header-status fragment (badge, timestamps,
+duration, exit code, summary counts), the Tasks panel, the Hosts panel, and the raw-output
+console's cursor-based tail (`handler=LogTail&after=N`, appending new lines rather than replacing
+the console) — each stops polling once `AnsibleRunJob.IsFinished`. Tab selection lives in plain
+radio inputs outside every polled fragment, so a poll never resets which tab is showing; the
+"only failed" task filter is pure CSS (`:has()`), for the same reason. Adding a fifth thing that
+needs to update live means adding a fifth small fragment, not folding it into an existing one or
+reintroducing a whole-page poll.
 
 ## Authentication
 
@@ -307,8 +339,18 @@ multi-user/RBAC model — do not add either without an explicit request.
 - Do not use unobserved `Task.Run` calls for durable operations.
 - A process restart may interrupt in-memory jobs; document this until persistent job recovery
   exists. An Ansible run's history entry (`IAnsibleExecutionStore`) surviving a restart is not the
-  same thing as the run itself resuming — an interrupted run just stays in whatever stage it was
-  last saved at (typically `Running`) and is never picked back up automatically.
+  same thing as the run itself resuming — a run left `Queued`/`Running` when the process stops is
+  swept to the terminal `Interrupted` stage at the next startup
+  (`IAnsibleExecutionStore.InterruptStuckExecutionsAsync`, called from `Program.cs` right after
+  migrating), so its page stops polling forever instead of waiting on a run that will never
+  finish; it is still not automatically resumed or retried. `AnsibleRunStage` also has `TimedOut`
+  (the process runner's own timeout) and `Cancelled` (modeled and handled everywhere a stage is
+  switched on, but nothing in the app can set it yet — there is no cancel action). Distinguishing
+  these, plus an app-shutdown-triggered `Interrupted` mid-run, from an ordinary `Failed` is
+  `AnsibleRunWorker.ProcessAsync`'s job; a persistence failure while saving any of these stages
+  must never retroactively change which one was actually determined, and must never be allowed to
+  crash the worker's outer loop — the terminal-state save happens in its own try/catch outside
+  every stage-determining catch block, for exactly this reason.
 
 Suggested provisioning stages:
 
@@ -371,6 +413,11 @@ Cancelled
 - The shared layout (`Pages/Shared/_Layout.cshtml`) carries a top navigation bar linking every
   top-level page (currently Provision, Ansible Runner, Job History, and Reconcile). Add new
   top-level pages there rather than leaving them reachable only by typing a URL.
+- `<main>`'s width comes from `.container` (1040px) plus an optional extra class from
+  `ViewData["ContainerClass"]`, empty by default. The Executions detail page is the one page that
+  sets it to `.container-wide` (1400px), since its Tasks/Hosts/console tabs need real width; don't
+  widen the global default for every other page's sake — set `ViewData["ContainerClass"]` per page
+  instead.
 
 ## Tests
 
@@ -390,7 +437,11 @@ Add tests alongside meaningful behavior. Prioritize:
 - the `LocalhostOnly` authorization requirement, for both loopback and non-loopback addresses;
 - reconciliation eligibility (matching/mismatched/DHCP address, already-tagged, out-of-range VMID) and that adoption re-verifies before tagging instead of trusting the caller's selection;
 - inventory generation reporting a container's actual address even when it differs from what the VMID convention would predict;
-- `OrchestratorSelfFilter` excluding the orchestrator's own container from every running-containers/target list it feeds.
+- `OrchestratorSelfFilter` excluding the orchestrator's own container from every running-containers/target list it feeds;
+- `AnsibleExecutionLogBuffer`'s batching (flush at the size threshold, flush at the interval, a guaranteed final flush, strictly increasing sequence numbers, a throwing store never faulting the loop) and `EfAnsibleExecutionLogStore`'s cursor query (ordering, `afterSequence` filtering, no cross-execution leakage);
+- `AnsibleOutputParser`'s task-centric projection (order, per-host aggregation, looped-task `LoopItem` disambiguation) alongside its existing host-centric coverage;
+- `IAnsibleExecutionStore.InterruptStuckExecutionsAsync` only touching `Queued`/`Running` rows;
+- `AnsibleRunWorker` never letting a persistence failure retroactively change an already-determined `Succeeded`/`Failed` outcome, and never letting one stop the worker from processing the next queued job.
 
 Use test doubles at the `IProxmoxService`, Ansible runner, and process boundaries. Do not require a live Proxmox server for the ordinary test suite.
 

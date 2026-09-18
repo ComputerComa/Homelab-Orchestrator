@@ -15,7 +15,7 @@ public class AnsibleRunnerServiceTests
             new ContainerSummary(142, "db-01", "stopped", ["base"]),
             new ContainerSummary(143, "cache-01", "running", ["base"]),
         ]);
-        var service = new AnsibleRunnerService(new FakeCatalog([]), proxmox, new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore());
+        var service = new AnsibleRunnerService(new FakeCatalog([]), proxmox, new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), new FakeAnsibleExecutionLogStore());
 
         var targets = await service.GetRunTargetOptionsAsync();
 
@@ -30,7 +30,7 @@ public class AnsibleRunnerServiceTests
             new ContainerSummary(100, Environment.MachineName, "running", ["orchestrator-only-tag"]),
             new ContainerSummary(141, "web-01", "running", ["base"]),
         ]);
-        var service = new AnsibleRunnerService(new FakeCatalog([]), proxmox, new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore());
+        var service = new AnsibleRunnerService(new FakeCatalog([]), proxmox, new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), new FakeAnsibleExecutionLogStore());
 
         var targets = await service.GetRunTargetOptionsAsync();
 
@@ -44,7 +44,7 @@ public class AnsibleRunnerServiceTests
         var store = new InMemoryAnsibleRunJobStore();
         var queue = new AnsibleRunJobQueue();
         var executions = new FakeAnsibleExecutionStore();
-        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, queue, executions);
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, queue, executions, new FakeAnsibleExecutionLogStore());
 
         var jobId = await service.SubmitAsync(new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
 
@@ -56,11 +56,24 @@ public class AnsibleRunnerServiceTests
     }
 
     [Fact]
+    public async Task SubmitAsync_records_the_submitting_user_on_the_job()
+    {
+        var store = new InMemoryAnsibleRunJobStore();
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), new FakeAnsibleExecutionLogStore());
+
+        var jobId = await service.SubmitAsync(new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null), submittedBy: "alice");
+
+        var job = await service.GetJobOrHistoryAsync(jobId);
+        Assert.NotNull(job);
+        Assert.Equal("alice", job.SubmittedBy);
+    }
+
+    [Fact]
     public async Task GetJobOrHistoryAsync_prefers_the_in_memory_job_over_persisted_history()
     {
         var store = new InMemoryAnsibleRunJobStore();
         var executions = new FakeAnsibleExecutionStore();
-        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, new AnsibleRunJobQueue(), executions);
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, new AnsibleRunJobQueue(), executions, new FakeAnsibleExecutionLogStore());
         var job = store.Create(new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
         await executions.SaveAsync(job with { Stage = AnsibleRunStage.Failed, Error = "stale" });
 
@@ -82,7 +95,7 @@ public class AnsibleRunnerServiceTests
             Stage = AnsibleRunStage.Succeeded,
             ExitCode = 0,
         });
-        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), executions);
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), executions, new FakeAnsibleExecutionLogStore());
 
         var job = await service.GetJobOrHistoryAsync(jobId);
 
@@ -94,7 +107,7 @@ public class AnsibleRunnerServiceTests
     [Fact]
     public async Task GetJobOrHistoryAsync_returns_null_when_not_found_anywhere()
     {
-        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore());
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), new FakeAnsibleExecutionLogStore());
 
         Assert.Null(await service.GetJobOrHistoryAsync(Guid.NewGuid()));
     }
@@ -104,7 +117,7 @@ public class AnsibleRunnerServiceTests
     {
         var executions = new FakeAnsibleExecutionStore();
         await executions.SaveAsync(new AnsibleRunJob { Id = Guid.NewGuid(), Request = new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null) });
-        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), executions);
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), executions, new FakeAnsibleExecutionLogStore());
 
         var recent = await service.ListRecentExecutionsAsync(10);
 
@@ -115,7 +128,7 @@ public class AnsibleRunnerServiceTests
     public async Task ListPlaybooksAsync_delegates_to_the_catalog()
     {
         var playbooks = new PlaybookSummary[] { new("apply-base", "apply-base.yml") };
-        var service = new AnsibleRunnerService(new FakeCatalog(playbooks), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore());
+        var service = new AnsibleRunnerService(new FakeCatalog(playbooks), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), new FakeAnsibleExecutionLogStore());
 
         Assert.Equal(playbooks, await service.ListPlaybooksAsync());
     }
@@ -124,11 +137,64 @@ public class AnsibleRunnerServiceTests
     public async Task ListPlaybookDetailsAsync_fetches_every_catalog_playbooks_detail()
     {
         var playbooks = new PlaybookSummary[] { new("apply-base", "apply-base.yml"), new("ssh-check", "ssh-check.yml") };
-        var service = new AnsibleRunnerService(new FakeCatalog(playbooks), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore());
+        var service = new AnsibleRunnerService(new FakeCatalog(playbooks), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), new FakeAnsibleExecutionLogStore());
 
         var details = await service.ListPlaybookDetailsAsync();
 
         Assert.Equal(["apply-base", "ssh-check"], details.Select(d => d.Name));
+    }
+
+    [Fact]
+    public async Task GetReconstructedOutputAsync_prefers_the_live_snapshot_over_the_log_store_and_legacy_output()
+    {
+        var store = new InMemoryAnsibleRunJobStore();
+        var logs = new FakeAnsibleExecutionLogStore();
+        var executions = new FakeAnsibleExecutionStore();
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, new AnsibleRunJobQueue(), executions, logs);
+        var job = store.Create(new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
+        await logs.AppendAsync(job.Id, [new AnsibleExecutionLog { ExecutionId = job.Id, Sequence = 1, Text = "from log store" }]);
+        store.AttachLiveLog(job.Id, MakeLiveBuffer(job.Id, logs, "from live buffer"));
+
+        var output = await service.GetReconstructedOutputAsync(job.Id);
+
+        Assert.Equal("from live buffer\n", output);
+    }
+
+    [Fact]
+    public async Task GetReconstructedOutputAsync_falls_back_to_the_log_store_when_nothing_is_live()
+    {
+        var store = new InMemoryAnsibleRunJobStore();
+        var logs = new FakeAnsibleExecutionLogStore();
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), store, new AnsibleRunJobQueue(), new FakeAnsibleExecutionStore(), logs);
+        var executionId = Guid.NewGuid();
+        await logs.AppendAsync(executionId, [
+            new AnsibleExecutionLog { ExecutionId = executionId, Sequence = 1, Text = "line one" },
+            new AnsibleExecutionLog { ExecutionId = executionId, Sequence = 2, Text = "line two" },
+        ]);
+
+        var output = await service.GetReconstructedOutputAsync(executionId);
+
+        Assert.Equal("line one\nline two", output);
+    }
+
+    [Fact]
+    public async Task GetReconstructedOutputAsync_falls_back_to_the_legacy_Output_column_when_nothing_else_has_it()
+    {
+        var executions = new FakeAnsibleExecutionStore();
+        var executionId = Guid.NewGuid();
+        await executions.SaveAsync(new AnsibleRunJob { Id = executionId, Request = new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null) });
+        var service = new AnsibleRunnerService(new FakeCatalog([]), new FakeProxmoxService([]), new InMemoryAnsibleRunJobStore(), new AnsibleRunJobQueue(), executions, new FakeAnsibleExecutionLogStore());
+
+        var output = await service.GetReconstructedOutputAsync(executionId);
+
+        Assert.Equal("", output);
+    }
+
+    private static AnsibleExecutionLogBuffer MakeLiveBuffer(Guid executionId, IAnsibleExecutionLogStore logStore, string text)
+    {
+        var buffer = new AnsibleExecutionLogBuffer(executionId, logStore, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        buffer.Enqueue(AnsibleLogStream.Stdout, text);
+        return buffer;
     }
 
     private sealed class FakeCatalog(IReadOnlyList<PlaybookSummary> playbooks) : IPlaybookCatalog

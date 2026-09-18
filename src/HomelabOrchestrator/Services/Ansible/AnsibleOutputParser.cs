@@ -6,11 +6,12 @@ namespace HomelabOrchestrator.Services.Ansible;
 
 /// <summary>
 /// Turns ansible-playbook's default plain-text stdout into a structured per-host, per-task view.
-/// Pure and stateless — called fresh from <c>_RunJobStatus.cshtml</c> on every render against the
-/// job's already-captured <c>Output</c>, never persisted. This is a best-effort text parser
-/// against Ansible's own default ("linear" strategy) callback format, not a custom callback
-/// plugin — an unrecognized line is silently ignored rather than breaking the whole parse; the
-/// full raw output stays available separately as a fallback for anything this misses.
+/// Pure and stateless — called fresh from the Executions pages on every render against the run's
+/// reconstructed output (<see cref="IAnsibleRunnerService.GetReconstructedOutputAsync"/>); the
+/// parsed result is never itself persisted. This is a best-effort text parser against Ansible's
+/// own default ("linear" strategy) callback format, not a custom callback plugin — an unrecognized
+/// line is silently ignored rather than breaking the whole parse; the full raw output stays
+/// available separately as a fallback for anything this misses.
 /// </summary>
 public static partial class AnsibleOutputParser
 {
@@ -31,6 +32,13 @@ public static partial class AnsibleOutputParser
 
     [GeneratedRegex("\"msg\"\\s*:\\s*\"(?<msg>.*?)\"", RegexOptions.Singleline)]
     private static partial Regex MsgRegex();
+
+    // A looped task's result carries an extra "=> (item=...)" marker before any JSON result block
+    // (or in place of one, for a task with no registered/debug output) — e.g.
+    // "changed: [host] => (item=a)" or "ok: [host] => (item=a) => {...}". Matching and stripping
+    // this first lets the existing JSON/brace handling below run unchanged against whatever's left.
+    [GeneratedRegex(@"^\s*=>\s*\(item=(?<item>.*?)\)\s*(?<rest>.*)$", RegexOptions.Singleline)]
+    private static partial Regex LoopItemRegex();
 
     public static AnsibleRunParsedState Parse(string rawOutput)
     {
@@ -183,7 +191,20 @@ public static partial class AnsibleOutputParser
             }
         }
 
-        return new AnsibleRunParsedState(hosts, recapEntries, notices);
+        // The task-centric projection of the same stepsByHost/taskOrder data hosts is built from —
+        // nothing here is reparsed, just regrouped by task instead of by host. A host with more
+        // than one result for a task looped; see AnsibleTaskStep.LoopItem.
+        var tasks = taskOrder
+            .Select((name, index) => new AnsibleTaskSummary(
+                name,
+                index,
+                hostOrder
+                    .Select(h => new AnsibleHostTaskResult(h, stepsByHost[h].Where(s => s.TaskName == name).ToList()))
+                    .Where(r => r.Results.Count > 0)
+                    .ToList()))
+            .ToList();
+
+        return new AnsibleRunParsedState(hosts, tasks, recapEntries, notices);
 
         void RecordStep(string host, AnsibleStepStatus status, string tail)
         {
@@ -195,10 +216,19 @@ public static partial class AnsibleOutputParser
             }
 
             var taskName = currentTask ?? "(unknown)";
+
+            string? loopItem = null;
+            var loopMatch = LoopItemRegex().Match(tail);
+            if (loopMatch.Success)
+            {
+                loopItem = loopMatch.Groups["item"].Value;
+                tail = loopMatch.Groups["rest"].Value;
+            }
+
             var braceIndex = tail.IndexOf('{');
             if (braceIndex < 0)
             {
-                steps.Add(new AnsibleTaskStep(taskName, status, null));
+                steps.Add(new AnsibleTaskStep(taskName, status, null, loopItem));
                 return;
             }
 
@@ -207,11 +237,11 @@ public static partial class AnsibleOutputParser
             if (depth <= 0)
             {
                 var msgMatch = MsgRegex().Match(jsonPart);
-                steps.Add(new AnsibleTaskStep(taskName, status, msgMatch.Success ? msgMatch.Groups["msg"].Value : null));
+                steps.Add(new AnsibleTaskStep(taskName, status, msgMatch.Success ? msgMatch.Groups["msg"].Value : null, loopItem));
                 return;
             }
 
-            steps.Add(new AnsibleTaskStep(taskName, status, null));
+            steps.Add(new AnsibleTaskStep(taskName, status, null, loopItem));
             absorbing = true;
             braceDepth = depth;
             absorbBuffer.Clear();

@@ -49,7 +49,7 @@ public class IndexModel(IAnsibleRunnerService runner, ILogger<IndexModel> logger
             return Partial("Shared/_ValidationErrors", ModelState);
         }
 
-        var jobId = await runner.SubmitAsync(Form.ToRunRequest(), cancellationToken);
+        var jobId = await runner.SubmitAsync(Form.ToRunRequest(), User.Identity?.Name, cancellationToken);
         logger.LogInformation(
             "Queued Ansible run {JobId}: playbook {Playbook}, target {Target}", jobId, Form.PlaybookName, Form.Target);
 

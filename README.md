@@ -131,8 +131,8 @@ Display current and previous operations with:
 - retry actions where appropriate.
 
 Ansible playbook runs already have this, persisted in SQLite — see
-[Job history](#job-history-implemented). Provisioning runs aren't included yet, and there's no
-retry action for either kind.
+[Job history](#job-history-implemented), including a **Run again** action that resubmits the same
+request as a new execution. Provisioning runs aren't included yet, and have no such action.
 
 ## Architecture
 
@@ -505,51 +505,79 @@ free-text command or path ever accepted from the browser:
 - **Execution** goes through the same job-queue/background-worker pattern as provisioning
   (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and
   confirming it navigates the browser straight to that run's page under
-  [Job history](#job-history-implemented) (`/Executions/{id}`), which polls its status over HTMX
-  until it reaches `Succeeded` or `Failed` — watching a run and launching one are two separate
-  screens, rather than one growing page. `AnsibleProcessRunner`
-  is the only place that spawns `ansible-playbook`, via `ProcessStartInfo`/`ArgumentList` with
+  [Job history](#job-history-implemented) (`/Executions/{id}`) — watching a run and launching one
+  are two separate screens, rather than one growing page. `AnsibleProcessRunner` is the only place
+  that spawns `ansible-playbook`, via `ProcessStartInfo`/`ArgumentList` with
   `UseShellExecute = false` — `-i <Ansible:InventoryFile>`, an optional `--limit <target>`, then
-  the resolved playbook path — and captures stdout/stderr line-by-line onto the job record.
-  Captured output is rendered with plain Razor interpolation (auto HTML-encoded), never
-  `Html.Raw`. A run that exceeds `Ansible:TimeoutSeconds` is killed (with its full process tree)
-  and the job fails.
-- **Output is shown structured, not as one flat scrolling stream.** `AnsibleOutputParser`
-  (`Services/Ansible/AnsibleOutputParser.cs`) re-parses the job's captured output on every render
-  into per-host, per-task results: a collapsible section per host (`<details>`, no JavaScript),
-  collapsed by default and auto-expanded only when that host has a failed or unreachable step,
-  with each step showing a spinner while still in progress, a check once it completes, or an X on
-  failure/unreachable, plus any `msg` text a task reported. Once `ansible-playbook` prints its
-  `PLAY RECAP`, a summary table (Ok/Changed/Unreachable/Failed/Skipped per host) appears below the
-  host sections. This is a best-effort parser of Ansible's own *default* plain-text stdout — not a
-  custom callback plugin — so an output shape it doesn't recognize simply isn't broken out into
-  steps; it's never lost, since the full raw output is still available (just collapsed by default)
-  underneath the structured view.
+  the resolved playbook path — and captures stdout/stderr line-by-line, tagged with which stream
+  each line came from. A run that exceeds `Ansible:TimeoutSeconds` is killed (with its full process
+  tree) and the job is marked `TimedOut`.
+- **Output is captured durably and shown structured, not as one flat scrolling stream that grows a
+  single in-memory string.** See [Job history](#job-history-implemented) for how output is
+  persisted; `AnsibleOutputParser` (`Services/Ansible/AnsibleOutputParser.cs`) turns that
+  reconstructed text into both a host-centric view (a collapsible section per host, `<details>`,
+  no JavaScript, collapsed by default and auto-expanded only when that host has a failed or
+  unreachable step) and a task-centric one (one row per task, aggregating every host's result for
+  it, with a failed row visible without expanding anything else) from the same underlying data.
+  Each step shows a spinner while still in progress, a check once it completes, or an X on
+  failure/unreachable, plus any `msg` text a task reported or, for a looped task, which item that
+  result was for. Once `ansible-playbook` prints its `PLAY RECAP`, a summary table
+  (Ok/Changed/Unreachable/Failed/Skipped per host) appears too. This is a best-effort parser of
+  Ansible's own *default* plain-text stdout — not a custom callback plugin — so an output shape it
+  doesn't recognize simply isn't broken out into steps; it's never lost, since the full raw output
+  is still available in its own tab.
 - **The SSH connectivity check** (`ansible/playbooks/ssh-check.yml`) is a safe, read-only
   playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
   container is reachable over SSH before running anything else against it; it makes no changes.
 
 ## Job history (implemented)
 
-Ansible run history is persisted in SQLite (via the same `ApplicationDbContext` Identity uses —
-one `DbContext`, not a second store) rather than only living in memory for the process's lifetime,
-and is browsable independently of launching a new run:
+Ansible run history — both the execution record and its full captured output — is persisted in
+SQLite (via the same `ApplicationDbContext` Identity uses — one `DbContext`, not a second store)
+rather than only living in memory for the process's lifetime, and is browsable independently of
+launching a new run:
 
 - **`/Executions`** lists every run, most recent first (capped at the 100 most recent — a fixed
   cap, not real pagination, matching this app's homelab scale elsewhere), with its playbook,
   target, a status badge, duration, and exit code. Each row links to that run's own page.
-- **`/Executions/{id}`** is the "watch one run" screen — the same structured per-host/per-task
-  view and recap table the Runner page rendered inline before, now on its own page so it isn't
-  fighting the launch form for space. It transparently renders either an in-flight run (still
-  polling, from the in-memory `IAnsibleRunJobStore`) or an already-finished one loaded from SQLite,
-  including after a restart — `IAnsibleRunnerService.GetJobOrHistoryAsync` checks the in-memory
-  store first and only falls back to persisted history when a run isn't found there.
+- **`/Executions/{id}`** is a wide, Rundeck/Semaphore-style execution page: a compact header
+  (playbook, status badge, requested target, resolved hosts, submitting user, submitted/started/
+  completed timestamps, duration, exit code, a sanitized error if any, **Run again** and
+  **Download log** actions), summary counts (hosts/tasks/changed/failed/unreachable), and three
+  tabs — **Tasks** (default), **Hosts**, and **Raw Output** (a fixed-height console with search,
+  line-wrap toggle, copy, and download). It transparently renders either an in-flight run (from the
+  in-memory `IAnsibleRunJobStore`) or an already-finished one loaded from SQLite, including after a
+  restart — `IAnsibleRunnerService.GetJobOrHistoryAsync` checks the in-memory store first and only
+  falls back to persisted history when a run isn't found there. **Run again** resubmits the exact
+  same request (same playbook, same target) as a brand-new execution and navigates to its page,
+  rather than resubmitting a raw form.
+
+  While a run is in flight, the header, the Tasks panel, the Hosts panel, and the console each poll
+  their own small HTMX fragment independently — never the whole page — so selected tab, the
+  "only failed" filter, and the console's scroll position all survive every poll. The console
+  specifically *appends* new lines rather than replacing itself, via a cursor
+  (`?handler=LogTail&after=<sequence>`) that only ever fetches entries newer than what's already
+  shown. Every fragment stops polling once the run reaches a terminal stage
+  (`Succeeded`/`Failed`/`TimedOut`/`Cancelled`/`Interrupted`).
 - **What's persisted, and when:** `IAnsibleExecutionStore`/`EfAnsibleExecutionStore`
-  (`Services/Ansible/`) save a run's snapshot at most three times — when it's queued, when it
-  starts running, and once more at its terminal state — never per captured output line, so the
-  frequent output-accumulation writes that already happen every ~1s poll stay in-memory only.
-  Retention/pruning of old history isn't implemented yet (an unbounded SQLite table); see
-  Milestone 4 below.
+  (`Services/Ansible/`) save the execution row a small, bounded number of times — when it's queued,
+  when it starts running, and once more at its terminal state — never per captured output line.
+  Captured output is a separate, append-only `AnsibleExecutionLogs` table
+  (`IAnsibleExecutionLogStore`/`EfAnsibleExecutionLogStore`), written in batches (roughly every 40
+  lines or 300ms, whichever first) by `AnsibleExecutionLogBuffer` rather than one row per line, and
+  guaranteed to flush whatever's left when a run ends. The raw-output tab and the download both read
+  through `IAnsibleRunnerService.GetReconstructedOutputAsync`, which transparently serves the live
+  in-memory buffer while a run is in flight, the log table once it's finished, or (for a run
+  persisted before this table existed) the legacy output column as a fallback. Retention/pruning of
+  old history isn't implemented yet (an unbounded SQLite table); see Milestone 4 below.
+- **Lifecycle**: beyond `Queued`/`Running`/`Succeeded`/`Failed`, a run can end `TimedOut` (killed
+  for exceeding `Ansible:TimeoutSeconds`) or `Interrupted` (the orchestrator process stopped mid-run
+  — either shut down while the run was active, or, if the process was already stopped, a run left
+  `Queued`/`Running` in the database is swept to `Interrupted` at the next startup, so its page
+  doesn't poll forever). `Cancelled` exists in the model but has no way to be triggered yet — there
+  is no cancel action in this app. A failure to persist a run's history is always distinct from a
+  failure of the playbook itself: saving history failing never changes an already-determined
+  `Succeeded`/`Failed` outcome, and never stops the worker from picking up the next queued run.
 - The Ansible Runner page (`/Runner`) itself now only launches a run — submitting one navigates
   the browser to its `/Executions/{id}` page rather than growing content on `/Runner` — plus shows
   a small "Recent runs" teaser linking into the full history.
@@ -725,8 +753,14 @@ The last three items need Ansible integration, which is a separate, larger piece
 - [x] Add authentication and authorization — see [Authentication](#authentication-implemented).
       Scoped to a single seeded operator account with no self-registration; a multi-user/RBAC
       model was deliberately not built, since this app is meant for one operator.
-- [ ] Add cancellation and safe retry behavior.
-- [ ] Add retention rules for execution output.
+- [ ] Add cancellation and safe retry behavior. `AnsibleRunStage.Cancelled` and the
+      `TimedOut`/`Interrupted` terminal stages are modeled and exhaustively handled (see
+      [Job history](#job-history-implemented)), but there is still no operator-facing way to cancel
+      an in-flight run, and "safe retry" today is only **Run again** (a brand-new execution of the
+      same request), not a retry of the same run.
+- [ ] Add retention rules for execution output. Execution rows and their per-line output
+      (`AnsibleExecutionLogs`) are both durably persisted (see
+      [Job history](#job-history-implemented)) but never pruned — both tables grow without bound.
 - [ ] Package as a native systemd service.
 - [ ] Add health checks and structured logging.
 

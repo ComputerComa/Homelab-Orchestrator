@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HomelabOrchestrator.Data;
 using HomelabOrchestrator.Models;
 using HomelabOrchestrator.Services.Jobs;
@@ -48,6 +49,29 @@ public class EfAnsibleExecutionStore(IDbContextFactory<ApplicationDbContext> dbC
         return await db.AnsibleExecutions.AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
     }
 
+    public async Task<int> InterruptStuckExecutionsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var stuck = await db.AnsibleExecutions
+            .Where(e => e.Stage == AnsibleRunStage.Queued || e.Stage == AnsibleRunStage.Running)
+            .ToListAsync(cancellationToken);
+
+        foreach (var execution in stuck)
+        {
+            execution.Stage = AnsibleRunStage.Interrupted;
+            execution.CompletedAtUtc ??= DateTime.UtcNow;
+            execution.Error = "The orchestrator restarted while this run was in progress.";
+        }
+
+        if (stuck.Count > 0)
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        return stuck.Count;
+    }
+
     private static AnsibleExecutionRecord ToRecord(AnsibleRunJob job)
     {
         var record = new AnsibleExecutionRecord { Id = job.Id };
@@ -61,9 +85,11 @@ public class EfAnsibleExecutionStore(IDbContextFactory<ApplicationDbContext> dbC
         record.TargetKind = job.Request.TargetKind;
         record.TargetValue = job.Request.TargetValue;
         record.Stage = job.Stage;
+        record.SubmittedBy = job.SubmittedBy;
         record.CreatedAtUtc = job.CreatedAtUtc.UtcDateTime;
+        record.StartedAtUtc = job.StartedAtUtc?.UtcDateTime;
         record.CompletedAtUtc = job.CompletedAtUtc?.UtcDateTime;
-        record.Output = job.Output;
+        record.ResolvedTargetHostnamesJson = job.ResolvedTargetHostnames is { } hosts ? JsonSerializer.Serialize(hosts) : null;
         record.ExitCode = job.ExitCode;
         record.Error = job.Error;
     }

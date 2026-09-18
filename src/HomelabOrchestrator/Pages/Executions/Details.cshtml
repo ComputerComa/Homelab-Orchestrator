@@ -1,8 +1,31 @@
 @page "{id:guid}"
 @model DetailsModel
 
+@{
+    ViewData["ContainerClass"] = "container-wide";
+}
+
 <p class="muted"><a href="/Executions">&larr; Job history</a></p>
 
-<h2>Execution</h2>
+<partial name="Shared/_ExecutionHeaderStatus" model="Model" />
 
-<partial name="Shared/_RunJobStatus" model="Model.Job" />
+<div class="exec-tabs">
+    <input type="radio" name="exec-tab" id="exec-tab-tasks" class="exec-tab-radio" checked="checked" />
+    <input type="radio" name="exec-tab" id="exec-tab-hosts" class="exec-tab-radio" />
+    <input type="radio" name="exec-tab" id="exec-tab-raw" class="exec-tab-radio" />
+
+    <div class="exec-tab-labels">
+        <label for="exec-tab-tasks">Tasks</label>
+        <label for="exec-tab-hosts">Hosts</label>
+        <label for="exec-tab-raw">Raw Output</label>
+        <label class="exec-tab-filter checkbox"><input type="checkbox" id="task-filter-failed" /> Only failed</label>
+    </div>
+
+    <div class="exec-tab-panels">
+        <partial name="Shared/_ExecutionTaskPanel" model="Model" />
+        <partial name="Shared/_ExecutionHostPanel" model="Model" />
+        <partial name="Shared/_ExecutionLogConsole" model="Model" />
+    </div>
+</div>
+
+<script src="~/js/execution-log.js" asp-append-version="true"></script>

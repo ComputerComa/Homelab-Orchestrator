@@ -1,0 +1,56 @@
+@using HomelabOrchestrator.Models
+@using HomelabOrchestrator.Services.Ansible
+@model HomelabOrchestrator.Pages.Executions.DetailsModel
+
+@{
+    var job = Model.Job!;
+    var target = AnsibleRunTargetDescription.Describe(job.Request.TargetKind, job.Request.TargetValue);
+    var allSteps = Model.Parsed.Hosts.SelectMany(h => h.Steps).ToList();
+}
+
+<div class="execution-header">
+    <div class="execution-header-main">
+        <h2>@job.Request.PlaybookName</h2>
+        <span class="status-badge status-badge-@job.Stage.ToString().ToLowerInvariant()">@job.Stage</span>
+    </div>
+
+    <dl class="fact-list execution-facts">
+        <dt>Requested target</dt>
+        <dd>@target</dd>
+        <dt>Resolved hosts</dt>
+        <dd>@(job.ResolvedTargetHostnames is { Count: > 0 } hosts ? string.Join(", ", hosts) : "-")</dd>
+        <dt>Submitted by</dt>
+        <dd>@(job.SubmittedBy ?? "-")</dd>
+        <dt>Submitted</dt>
+        <dd>@job.CreatedAtUtc.ToLocalTime().ToString("g")</dd>
+        <dt>Started</dt>
+        <dd>@(job.StartedAtUtc?.ToLocalTime().ToString("g") ?? "-")</dd>
+        <dt>Completed</dt>
+        <dd>@(job.CompletedAtUtc?.ToLocalTime().ToString("g") ?? "-")</dd>
+        <dt>Duration</dt>
+        <dd>@HomelabOrchestrator.Pages.Executions.DetailsModel.FormatDuration(job)</dd>
+        <dt>Exit code</dt>
+        <dd>@(job.ExitCode?.ToString() ?? "-")</dd>
+    </dl>
+
+    @if (!string.IsNullOrEmpty(job.Error))
+    {
+        <p class="execution-error">@job.Error</p>
+    }
+
+    <div class="actions">
+        <form method="post" hx-post hx-page="Details" hx-page-handler="RunAgain" asp-route-id="@job.Id">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-secondary">Run again</button>
+        </form>
+        <a class="btn btn-secondary" href="/Executions/Details/@job.Id?handler=DownloadLog">Download log</a>
+    </div>
+</div>
+
+<div class="execution-summary-counts">
+    <div class="summary-count"><span class="summary-count-value">@Model.Parsed.Hosts.Count</span><span class="summary-count-label">Hosts</span></div>
+    <div class="summary-count"><span class="summary-count-value">@Model.Parsed.Tasks.Count</span><span class="summary-count-label">Tasks</span></div>
+    <div class="summary-count"><span class="summary-count-value">@allSteps.Count(s => s.Status == AnsibleStepStatus.Changed)</span><span class="summary-count-label">Changed</span></div>
+    <div class="summary-count summary-count-failed"><span class="summary-count-value">@allSteps.Count(s => s.Status == AnsibleStepStatus.Failed)</span><span class="summary-count-label">Failed</span></div>
+    <div class="summary-count summary-count-failed"><span class="summary-count-value">@allSteps.Count(s => s.Status == AnsibleStepStatus.Unreachable)</span><span class="summary-count-label">Unreachable</span></div>
+</div>

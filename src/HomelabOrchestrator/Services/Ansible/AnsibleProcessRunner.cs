@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using HomelabOrchestrator.Models;
 using HomelabOrchestrator.Options;
 using Microsoft.Extensions.Options;
 
@@ -16,7 +17,7 @@ public class AnsibleProcessRunner(IOptions<AnsibleOptions> options, ILogger<Ansi
     public async Task<int> RunPlaybookAsync(
         string playbookPath,
         string? limit,
-        Action<string> onOutputLine,
+        Action<AnsibleLogStream, string> onOutputLine,
         CancellationToken cancellationToken = default)
     {
         var inventoryPath = Path.Combine(_options.RepositoryRoot, _options.InventoryFile);
@@ -57,16 +58,16 @@ public class AnsibleProcessRunner(IOptions<AnsibleOptions> options, ILogger<Ansi
 
         using var process = new Process { StartInfo = startInfo };
 
-        void Capture(string? line)
+        void Capture(AnsibleLogStream stream, string? line)
         {
             if (line is not null)
             {
-                onOutputLine(line);
+                onOutputLine(stream, line);
             }
         }
 
-        process.OutputDataReceived += (_, e) => Capture(e.Data);
-        process.ErrorDataReceived += (_, e) => Capture(e.Data);
+        process.OutputDataReceived += (_, e) => Capture(AnsibleLogStream.Stdout, e.Data);
+        process.ErrorDataReceived += (_, e) => Capture(AnsibleLogStream.Stderr, e.Data);
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.TimeoutSeconds));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);

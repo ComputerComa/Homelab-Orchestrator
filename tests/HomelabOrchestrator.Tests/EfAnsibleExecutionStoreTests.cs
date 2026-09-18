@@ -66,17 +66,56 @@ public class EfAnsibleExecutionStoreTests : IDisposable
         };
         await _store.SaveAsync(job);
 
-        var finished = job with { Stage = AnsibleRunStage.Succeeded, ExitCode = 0, Output = "ok", CompletedAtUtc = DateTimeOffset.UtcNow };
+        var finished = job with { Stage = AnsibleRunStage.Succeeded, ExitCode = 0, CompletedAtUtc = DateTimeOffset.UtcNow };
         await _store.SaveAsync(finished);
 
         var found = await _store.GetAsync(job.Id);
         Assert.NotNull(found);
         Assert.Equal(AnsibleRunStage.Succeeded, found.Stage);
         Assert.Equal(0, found.ExitCode);
-        Assert.Equal("ok", found.Output);
 
         var recent = await _store.ListRecentAsync(10);
         Assert.Single(recent);
+    }
+
+    [Fact]
+    public async Task SaveAsync_round_trips_SubmittedBy_StartedAtUtc_and_ResolvedTargetHostnames()
+    {
+        var job = new AnsibleRunJob
+        {
+            Id = Guid.NewGuid(),
+            Request = new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.Selection, "web-01,db-01"),
+            Stage = AnsibleRunStage.Running,
+            SubmittedBy = "alice",
+            StartedAtUtc = DateTimeOffset.UtcNow,
+            ResolvedTargetHostnames = ["web-01", "db-01"],
+        };
+
+        await _store.SaveAsync(job);
+        var found = await _store.GetAsync(job.Id);
+
+        Assert.NotNull(found);
+        Assert.Equal("alice", found.SubmittedBy);
+        Assert.NotNull(found.StartedAtUtc);
+        Assert.Equal("[\"web-01\",\"db-01\"]", found.ResolvedTargetHostnamesJson);
+    }
+
+    [Fact]
+    public async Task InterruptStuckExecutionsAsync_only_touches_Queued_and_Running_rows()
+    {
+        var queued = new AnsibleRunJob { Id = Guid.NewGuid(), Request = new AnsibleRunRequest("a", AnsibleRunTargetKind.All, null), Stage = AnsibleRunStage.Queued };
+        var running = new AnsibleRunJob { Id = Guid.NewGuid(), Request = new AnsibleRunRequest("b", AnsibleRunTargetKind.All, null), Stage = AnsibleRunStage.Running };
+        var succeeded = new AnsibleRunJob { Id = Guid.NewGuid(), Request = new AnsibleRunRequest("c", AnsibleRunTargetKind.All, null), Stage = AnsibleRunStage.Succeeded };
+        await _store.SaveAsync(queued);
+        await _store.SaveAsync(running);
+        await _store.SaveAsync(succeeded);
+
+        var count = await _store.InterruptStuckExecutionsAsync();
+
+        Assert.Equal(2, count);
+        Assert.Equal(AnsibleRunStage.Interrupted, (await _store.GetAsync(queued.Id))!.Stage);
+        Assert.Equal(AnsibleRunStage.Interrupted, (await _store.GetAsync(running.Id))!.Stage);
+        Assert.Equal(AnsibleRunStage.Succeeded, (await _store.GetAsync(succeeded.Id))!.Stage);
     }
 
     [Fact]

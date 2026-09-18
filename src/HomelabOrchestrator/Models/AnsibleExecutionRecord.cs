@@ -20,9 +20,26 @@ public class AnsibleExecutionRecord
     public AnsibleRunTargetKind TargetKind { get; set; }
     public string? TargetValue { get; set; }
     public AnsibleRunStage Stage { get; set; }
+
+    /// <summary>The signed-in operator's username at submission time — this app has exactly one seeded account, so a display name is enough; no FK to AspNetUsers.</summary>
+    public string? SubmittedBy { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
+
+    /// <summary>When the worker actually started running the playbook — distinct from <see cref="CreatedAtUtc"/> (the Queued time), which may lag behind it while another run is in progress.</summary>
+    public DateTime? StartedAtUtc { get; set; }
+
     public DateTime? CompletedAtUtc { get; set; }
-    public string Output { get; set; } = "";
+
+    /// <summary>The hostnames ansible-playbook was actually limited to, resolved immediately before running — a JSON string array. Null until the worker resolves the target (e.g. still Queued).</summary>
+    public string? ResolvedTargetHostnamesJson { get; set; }
+
+    /// <summary>
+    /// Legacy raw output, kept only for rows persisted before <see cref="Models.AnsibleExecutionLog"/>
+    /// existed. Never written by new code — new runs' output lives entirely in that table instead.
+    /// </summary>
+    public string? Output { get; set; }
+
     public int? ExitCode { get; set; }
     public string? Error { get; set; }
 }
