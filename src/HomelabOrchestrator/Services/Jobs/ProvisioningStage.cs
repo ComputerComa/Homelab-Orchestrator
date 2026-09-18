@@ -1,9 +1,15 @@
 namespace HomelabOrchestrator.Services.Jobs;
 
 /// <summary>
-/// Stages the current, Proxmox-only provisioning workflow actually performs. This is a subset
-/// of the stages the full product intent describes (see AGENTS.md) — WaitingForSsh and
-/// ApplyingBase are not implemented yet and are intentionally absent rather than faked.
+/// Stages the provisioning workflow performs, in order. <see cref="WaitingForSsh"/> and
+/// <see cref="ApplyingBase"/> only run when the job requested the container be started
+/// (<c>ProvisioningRequest.Start</c>) — a container left stopped goes straight from
+/// <see cref="WaitingForProxmox"/> to <see cref="Succeeded"/>, since there's nothing reachable to
+/// configure yet. <see cref="ApplyingBase"/> covers both running <c>apply-base.yml</c> and
+/// synchronizing the current SSH key registry to the new container — a failure at either point,
+/// or during <see cref="WaitingForSsh"/>, lands the job in <see cref="Failed"/> without ever
+/// deleting the underlying LXC; re-running the base playbook or a key sync against it afterward
+/// is an ordinary Runner/SSH Keys page action, not a special retry path.
 /// </summary>
 public enum ProvisioningStage
 {
@@ -11,6 +17,8 @@ public enum ProvisioningStage
     Allocating,
     CreatingContainer,
     WaitingForProxmox,
+    WaitingForSsh,
+    ApplyingBase,
     Succeeded,
     Failed,
 }

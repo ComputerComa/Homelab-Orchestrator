@@ -168,7 +168,7 @@ public partial class SshKeyManagementService(
         await keyStore.DeleteAsync(keyId, cancellationToken);
     }
 
-    public async Task<Guid> SyncAsync(string? submittedBy, CancellationToken cancellationToken = default)
+    public async Task<Guid> SyncAsync(string? submittedBy, string? targetHostname = null, CancellationToken cancellationToken = default)
     {
         var enabled = await keyStore.ListEnabledAsync(cancellationToken);
 
@@ -192,7 +192,9 @@ public partial class SshKeyManagementService(
             ["sync_ssh_keys_exclusive"] = syncOptions.Value.Exclusive,
         };
 
-        var request = new AnsibleRunRequest("sync-ssh-keys", AnsibleRunTargetKind.TagGroup, ProxmoxTags.ManagedByOrchestrator, extraVars);
+        var request = targetHostname is null
+            ? new AnsibleRunRequest("sync-ssh-keys", AnsibleRunTargetKind.TagGroup, ProxmoxTags.ManagedByOrchestrator, extraVars)
+            : new AnsibleRunRequest("sync-ssh-keys", AnsibleRunTargetKind.Vm, targetHostname, extraVars);
         return await runnerService.SubmitAsync(request, submittedBy, cancellationToken);
     }
 

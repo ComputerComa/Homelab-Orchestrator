@@ -94,7 +94,7 @@ public class IndexModel(ISshKeyManagementService keyManagement, IOptions<SshSync
         Guid executionId;
         try
         {
-            executionId = await keyManagement.SyncAsync(User.Identity?.Name, cancellationToken);
+            executionId = await keyManagement.SyncAsync(User.Identity?.Name, cancellationToken: cancellationToken);
         }
         catch (InvalidOperationException ex)
         {

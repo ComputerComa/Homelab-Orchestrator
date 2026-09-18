@@ -15,19 +15,22 @@ This project intentionally does not use OpenTofu or maintain a static Ansible in
 
 ## Status
 
-Milestone 1 (provisioning parity) is implemented except for the two steps that depend on
-Ansible, which does not exist in this repository yet: waiting for SSH and applying the
-`base` role. Today, from the web UI, an operator can:
+Milestone 1 (provisioning parity) is fully implemented. Today, from the web UI, an operator can:
 
 - see the next available VMID, the address it maps to, and the newest Debian 13 template,
   refreshed on demand;
 - submit a hostname and sizing, review a summary, and confirm — there is no SSH key field;
   containers trust the orchestrator's own combined public keys (see
-  [SSH key management](#ssh-key-management));
+  [SSH key management](#ssh-key-management-provisioning-time));
 - have the request queued and executed by a background worker that recalculates the
   VMID/address/template itself immediately before creating anything — the browser preview
   shown earlier is never trusted or reused;
-- watch the job's stage update live over HTMX polling until it succeeds or fails.
+- watch the job's stage update live over HTMX polling as it waits for Proxmox, then (for a
+  container started at creation) waits for the container to accept SSH connections, applies the
+  Ansible `base` role, and synchronizes the current SSH key registry to just that one container —
+  see [SSH key registry, enrollment, and sync](#ssh-key-registry-enrollment-and-sync-implemented) —
+  before succeeding or failing. A failure in any of the post-creation steps never deletes the
+  LXC; it's retried with the same Runner/SSH Keys page actions used for any other container.
 
 Outside the web UI, two JSON endpoints generate a standard Ansible dynamic inventory for a single
 container or for every currently running one, and a matching custom Ansible inventory plugin
@@ -86,7 +89,7 @@ The server determines:
 - node, storage, bridge, subnet, gateway, and DNS configuration;
 - the newest available Debian 13 template;
 - the SSH public keys to trust, combined from the orchestrator's own filesystem — never
-  entered by the operator (see [SSH key management](#ssh-key-management));
+  entered by the operator (see [SSH key management](#ssh-key-management-provisioning-time));
 - required Proxmox features and tags.
 
 A provisioning job should expose each stage independently so a failed Ansible run can be retried without recreating the LXC.
@@ -297,6 +300,10 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
   "SshSync": {
     "Exclusive": false
   },
+  "Provisioning": {
+    "SshReadyTimeoutSeconds": 300,
+    "SshPollIntervalSeconds": 3
+  },
   "ConnectionStrings": {
     "Default": ""
   },
@@ -310,6 +317,11 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
 `SshSync:Exclusive` governs how `sync-ssh-keys.yml` reconciles `/root/.ssh/authorized_keys` on
 managed containers — see [SSH key registry, enrollment, and sync](#ssh-key-registry-enrollment-and-sync-implemented)
 below. Leave it `false` until the registry is confirmed to hold every key that should have access.
+
+`Provisioning:SshReadyTimeoutSeconds` and `Provisioning:SshPollIntervalSeconds` govern how long a
+newly created container is given to start accepting SSH connections before provisioning is marked
+failed (the container is never deleted for this) — see
+[Provisioning workflow](#provisioning-workflow) below.
 
 `Ansible:RepositoryRoot` left blank (the default) resolves to the `ansible/` directory that ships
 alongside `src/` and `tests/` in this repository; set it explicitly if a deployment lays out
@@ -424,7 +436,7 @@ additive to — and does not replace — the provisioning-time mechanism above.
 The application exposes two read-only, unauthenticated JSON endpoints that generate a standard
 Ansible dynamic-inventory document (the same `_meta`/`hostvars` shape `ansible-inventory --list`
 and inventory scripts/plugins produce — see
-[SSH key management](#ssh-key-management) for where `ansible_user`/`ansible_port`/
+[SSH key management](#ssh-key-management-provisioning-time) for where `ansible_user`/`ansible_port`/
 `ansible_ssh_private_key_file` come from). Each host's hostvars also include `tags`: Proxmox's
 own semicolon-separated tag string (e.g. `base;managed-by-orchestrator;mqtt`), split, trimmed,
 and returned as a JSON array — always present, empty (`[]`) rather than missing or `null` for an
@@ -755,7 +767,7 @@ Requirements:
 - network access to the Proxmox API
 - a least-privilege Proxmox API token
 - an orchestrator SSH keypair at `/root/.ssh/id_ed25519(.pub)` and workstation keys in
-  `/root/.ssh/authorized_keys` (see [SSH key management](#ssh-key-management)) — provisioning
+  `/root/.ssh/authorized_keys` (see [SSH key management](#ssh-key-management-provisioning-time)) — provisioning
   runs without them, but new containers will have no key-based SSH access until they exist
 - Ansible Core (`ansible-playbook`/`ansible-inventory`) and SSH access to provisioned
   containers — required to use the [Ansible Runner](#ansible-runner-implemented) page;
@@ -800,12 +812,12 @@ ansible-inventory -i inventory/orchestrator.yml --list
 - [x] Create and start a Debian 13 LXC.
 - [x] Enable `nesting=1`.
 - [x] Poll and display background-job status with HTMX.
-- [ ] Wait for SSH.
-- [ ] Apply the Ansible `base` role.
-- [ ] Allow retrying the base stage without recreating the LXC.
-
-The last three items need Ansible integration, which is a separate, larger piece of work
-(see AGENTS.md's Ansible requirements) and has not been started.
+- [x] Wait for SSH.
+- [x] Apply the Ansible `base` role.
+- [x] Allow retrying the base stage without recreating the LXC — not a dedicated retry API, but
+      the same Runner-page "apply-base" run or SSH Keys page "Synchronize now" action an operator
+      would use for any other container, since the LXC is preserved and already a normal managed,
+      running container by the time either post-creation step could fail.
 
 ### Milestone 2: Maintenance
 

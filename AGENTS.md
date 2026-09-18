@@ -74,13 +74,19 @@ The expected initial workflow is:
 6. Configure storage, CPU, memory, swap, network, DNS, tags, and the combined SSH public keys
    from `ISshPublicKeyProvider` (see [SSH key management](#ssh-key-management)).
 7. Wait for the Proxmox task to finish.
-8. Wait for SSH to become available.
-9. Run `ansible/playbooks/apply-base.yml` against the new address.
+8. Wait for SSH to become available (skipped for a container provisioned without starting it).
+9. Run `ansible/playbooks/apply-base.yml`, then synchronize the current SSH key registry (see
+   [SSH key management](#ssh-key-management)), both scoped to just this one new container via
+   `AnsibleRunTargetKind.Vm` — never the whole managed fleet.
 10. Record and display the outcome of every stage.
 
 Do not treat a browser preview of VMID or IP address as reserved. Recalculate them inside the serialized provisioning worker immediately before creation.
 
-If LXC creation succeeds but Ansible fails, preserve the LXC. Mark the Ansible stage failed and make it independently retryable.
+If LXC creation succeeds but Ansible fails, preserve the LXC. Mark the Ansible stage failed —
+`ProvisioningWorker` never deletes or rolls back the container for a post-creation configuration
+failure. Retrying is not a dedicated API: it's the same Runner-page "apply-base" run or SSH Keys
+page "Synchronize now" action an operator would use for any other container, since the new
+container is already an ordinary managed, running LXC by the time either step could fail.
 
 ## Container reconciliation
 
@@ -224,7 +230,13 @@ does not apply to this registry, which exists specifically to hold enrolled publ
 
 - Store roles, approved playbooks, metadata, and dependency declarations in Git.
 - Do not store a list of managed hosts in Git.
-- For a newly provisioned host, use an inline inventory or an execution-scoped generated inventory.
+- For a newly provisioned host, `ProvisioningWorker` submits `AnsibleRunTargetKind.Vm` with the
+  container's hostname — the same live Proxmox-discovered inventory as every other run
+  (`ansible-playbook -i inventory/orchestrator.yml --limit <hostname>`), narrowed with `--limit`
+  rather than a separate inline/ad-hoc inventory. This requires the container to already be
+  running with a resolvable address by the time the run is submitted, which
+  `ProvisioningWorker`'s own SSH-reachability wait (`ISshReachabilityChecker`) guarantees before
+  it ever submits anything.
 - For maintenance, discover hosts from Proxmox and generate inventory for the execution.
   `IAnsibleInventoryService` (`Services/Ansible/`) already does this — reuse it rather than
   writing a second inventory generator. It composes `IProxmoxService.ListContainersAsync` with
@@ -438,7 +450,9 @@ multi-user/RBAC model — do not add either without an explicit request.
   crash the worker's outer loop — the terminal-state save happens in its own try/catch outside
   every stage-determining catch block, for exactly this reason.
 
-Suggested provisioning stages:
+`ProvisioningStage` (`Services/Jobs/`) implements all of these except `Cancelled`, which stays
+suggested-only — like `AnsibleRunStage.Cancelled`, there is no cancel action anywhere in the app
+yet:
 
 ```text
 Queued
@@ -449,7 +463,7 @@ WaitingForSsh
 ApplyingBase
 Succeeded
 Failed
-Cancelled
+Cancelled (not yet implemented)
 ```
 
 ## Security

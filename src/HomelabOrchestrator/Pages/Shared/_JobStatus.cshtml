@@ -8,6 +8,8 @@
         ProvisioningStage.Allocating => "Allocating a VMID and address…",
         ProvisioningStage.CreatingContainer => "Creating the container…",
         ProvisioningStage.WaitingForProxmox => "Waiting for Proxmox to finish…",
+        ProvisioningStage.WaitingForSsh => "Waiting for the container to accept SSH connections…",
+        ProvisioningStage.ApplyingBase => "Applying base configuration and synchronizing SSH keys…",
         _ => "Working…",
     };
 }

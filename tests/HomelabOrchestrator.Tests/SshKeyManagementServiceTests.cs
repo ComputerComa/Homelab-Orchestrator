@@ -300,6 +300,22 @@ public class SshKeyManagementServiceTests
     }
 
     [Fact]
+    public async Task SyncAsync_targets_a_single_vm_by_hostname_when_given_one_instead_of_the_tag_group()
+    {
+        var (service, keys, _, runner) = Build();
+        keys.Keys.Add(NewKey(SshKeyStatus.Enabled, keyData: "AAAAenabled"));
+
+        await service.SyncAsync("provisioning", targetHostname: "new-container");
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Equal(AnsibleRunTargetKind.Vm, runner.LastRequest!.TargetKind);
+        Assert.Equal("new-container", runner.LastRequest.TargetValue);
+
+        var lines = GetAuthorizedKeysLines(runner.LastRequest);
+        Assert.Contains(lines, l => l.Contains("AAAAenabled"));
+    }
+
+    [Fact]
     public async Task SyncAsync_always_includes_the_orchestrators_own_key_even_with_zero_enabled_keys()
     {
         var (service, _, _, runner) = Build();

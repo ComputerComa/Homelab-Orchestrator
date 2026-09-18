@@ -54,5 +54,11 @@ public interface ISshKeyManagementService
     /// run through the normal Ansible execution pipeline. Throws before queuing anything if the
     /// orchestrator's own key can't be read — this is the actual lockout guard.
     /// </summary>
-    Task<Guid> SyncAsync(string? submittedBy, CancellationToken cancellationToken = default);
+    /// <param name="targetHostname">
+    /// When null (the default — every UI call site), synchronizes the whole managed fleet. When
+    /// given, scopes the run to just that one container instead — used right after provisioning a
+    /// new container, where pushing an exclusive-mode replace to every other managed container on
+    /// every single provision would be needless blast radius.
+    /// </param>
+    Task<Guid> SyncAsync(string? submittedBy, string? targetHostname = null, CancellationToken cancellationToken = default);
 }

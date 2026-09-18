@@ -60,6 +60,10 @@ builder.Services
     .Bind(builder.Configuration.GetSection(SshSyncOptions.SectionName));
 
 builder.Services
+    .AddOptions<ProvisioningOptions>()
+    .Bind(builder.Configuration.GetSection(ProvisioningOptions.SectionName));
+
+builder.Services
     .AddOptions<AdminOptions>()
     .Bind(builder.Configuration.GetSection(AdminOptions.SectionName))
     .Validate(
@@ -163,6 +167,9 @@ builder.Services.AddSingleton<IProxmoxService, ProxmoxService>();
 
 // Reads workstation + orchestrator public keys from disk; never touches the private key.
 builder.Services.AddSingleton<ISshPublicKeyProvider, SshPublicKeyProvider>();
+
+// A bare TCP-level check used to detect when a freshly created container is ready for Ansible.
+builder.Services.AddSingleton<ISshReachabilityChecker, SshReachabilityChecker>();
 
 // Centralized SSH public-key registry: enrollment, approval, revocation, and Ansible-driven sync.
 builder.Services.AddSingleton<ISshKeyStore, EfSshKeyStore>();
