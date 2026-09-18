@@ -39,14 +39,17 @@ hosts from Proxmox and generate inventory" capability Maintenance will eventuall
 A second page, the [Ansible Runner](#ansible-runner-implemented), does run `ansible-playbook`:
 an operator picks one of the playbooks committed under `ansible/playbooks/` and a target — a
 specific running container, every running container currently carrying a given Proxmox tag, or
-every running container — and a background worker runs it, streaming the captured output back
-to the page.
+every running container — and confirming navigates to that run's own page, which streams the
+captured output back live.
 
-A third page, [Reconcile](#reconcile-pre-existing-containers-implemented), finds containers that
+A third page, [Job history](#job-history-implemented), lists every past (and in-flight) Ansible
+run, persisted in SQLite, and links to each one's own live-or-historical detail page.
+
+A fourth page, [Reconcile](#reconcile-pre-existing-containers-implemented), finds containers that
 predate the orchestrator (not tagged `managed-by-orchestrator`) and offers to adopt the ones whose
 actual configured address already matches what the VMID convention expects — never guessing for
-the ones that don't. A top navigation bar (Provision / Ansible Runner / Reconcile) switches
-between all three pages.
+the ones that don't. A top navigation bar (Provision / Ansible Runner / Job History / Reconcile)
+switches between all four pages.
 
 The whole web UI requires signing in as the single seeded operator account, and the two
 inventory endpoints above are restricted to loopback callers — see
@@ -54,10 +57,12 @@ inventory endpoints above are restricted to loopback callers — see
 
 See [Milestone 1](#milestone-1-provisioning-parity) below for the exact checklist.
 
-Maintenance and execution history (Milestones 2 and 4) are design-only — described under
-[Planned interface](#planned-interface) but not yet implemented. The playbook catalog
-(Milestone 3) is partially implemented by the Ansible Runner above; see that section for what's
-still missing (per-playbook metadata/forms and persisted execution history).
+Maintenance (Milestone 2) is design-only — described under [Planned interface](#planned-interface)
+but not yet implemented. The playbook catalog (Milestone 3) is partially implemented by the
+Ansible Runner above; see that section for what's still missing (per-playbook metadata/forms).
+Ansible run execution history, one item of Milestone 4, is now persisted in SQLite — see
+[Job history](#job-history-implemented); the rest of that milestone (cancellation/retry, retention,
+systemd packaging, health checks) remains unimplemented.
 
 ## Planned interface
 
@@ -125,6 +130,10 @@ Display current and previous operations with:
 - captured output;
 - retry actions where appropriate.
 
+Ansible playbook runs already have this, persisted in SQLite — see
+[Job history](#job-history-implemented), including a **Run again** action that resubmits the same
+request as a new execution. Provisioning runs aren't included yet, and have no such action.
+
 ## Architecture
 
 ```text
@@ -144,7 +153,7 @@ ASP.NET Core application
   |           |
   |           `-- Newly created or selected LXCs
   |
-  `-- SQLite execution history (planned)
+  `-- SQLite execution history (Ansible runs)
 ```
 
 ### Technology choices
@@ -155,7 +164,7 @@ ASP.NET Core application
 - `Corsinvest.ProxmoxVE.Api`
 - hosted background services and channels
 - Ansible Core
-- SQLite for execution history when persistence is introduced
+- SQLite for Ansible run execution history
 - native Linux binaries and systemd services
 
 ## Source-of-truth rules
@@ -450,59 +459,128 @@ free-text command or path ever accepted from the browser:
   a defense-in-depth check also confirms the resolved path still sits under `playbooks/`. This is
   a plain listing, not the metadata-driven catalog with per-playbook input forms described under
   [Playbook catalog](#playbook-catalog) below — every playbook here runs with no extra variables.
-- **Targets** are one of:
-  - a specific container, chosen by hostname, from every *currently running* container
-    (excluding the orchestrator's own container — see below);
-  - a tag group — every currently running container carrying a given Proxmox tag, again
-    excluding the orchestrator's own;
-  - all currently running containers except the orchestrator's own (no `--limit` at all).
 
-  Every "running containers" listing this page and its worker use — the target dropdown's
-  options, target validation immediately before a run, and the underlying inventory "All"
-  resolves against — excludes the orchestrator's own container (`OrchestratorSelfFilter`). It
-  typically runs as an LXC on the same node it manages, so without this exclusion it would be
-  offered (and, for "All", silently included) as a target for every playbook, including the SSH
-  connectivity check trying to connect back to itself.
+  Picking one happens in a modal (a native `<dialog>`, opened/closed by a small amount of vanilla
+  JS in `wwwroot/js/runner.js` — still no JS framework) rather than a flat `<select>`, so it holds
+  up as the number of playbooks grows: a search box filters a compact, independently-scrolling
+  list of names on the left, and clicking one shows its full **parsed name, description, and
+  steps** in a detail pane on the right without resizing the modal. That parsing is
+  `PlaybookMetadataParser` (`Services/Ansible/PlaybookMetadataParser.cs`) plus
+  `PlaybookCatalog.GetDetailAsync` — a line-oriented, best-effort reader of the playbook's own
+  YAML (no full YAML parser, mirroring `AnsibleOutputParser`'s style): a play's first `name:` line
+  becomes the description, and every later `name:` line becomes a step — including, for a
+  playbook that only has `roles: [...]` and no inline `tasks:` (like `apply-base.yml`), each
+  referenced role's own `tasks/main.yml`, resolved and parsed the same way. All playbooks' details
+  are loaded up front when the page loads, since there are only ever a handful.
+- **Targets** are chosen from a checkbox list of every *currently running* container (excluding
+  the orchestrator's own — see below), filterable by tag via a dropdown above the list. Two quick
+  actions populate it without touching a single checkbox — "Select all running" and, once a tag is
+  picked in the filter, "Select" next to it — and stay **live**: submitting without further manual
+  changes still submits as `all` or `tag:<tag>`, re-evaluated by the worker against whatever is
+  actually running immediately before the run starts, exactly as before. Checking or unchecking
+  even one box locks the target into a frozen, ad hoc hostname list instead (`AnsibleRunTargetKind.Selection`,
+  encoded as `RunFormModel.Target = "selection:<host1>,<host2>,..."`, resolved by
+  `AnsibleRunWorker.ResolveLimitAsync` into a comma-joined `--limit` — Ansible's own flag already
+  accepts a host list this way) — every hostname in it is still re-validated as currently running
+  immediately before the run starts, the same "never trust a stale browser value" rule as the
+  other two kinds; any that no longer is fails the job, without starting a process, naming exactly
+  which one(s).
 
-  Rather than one flat dropdown mixing containers and tags together, "Specific container" and
-  "Tag group" are separate, individually collapsible `<details>` sections (plain HTML, no
-  JavaScript) — each shows its own count and starts collapsed unless it already holds the
-  current selection. The underlying encoding is unchanged (`RunFormModel.ParseTarget()` still
-  reads a single `all` / `vm:<hostname>` / `tag:<tag>` value from one radio-button group), so
-  this is a presentation-only change.
+  Every "running containers" listing this page and its worker use — the checkbox list itself,
+  target validation immediately before a run, and the underlying inventory "All" resolves
+  against — excludes the orchestrator's own container (`OrchestratorSelfFilter`). It typically
+  runs as an LXC on the same node it manages, so without this exclusion it would be offered (and,
+  for "All", silently included) as a target for every playbook, including the SSH connectivity
+  check trying to connect back to itself.
 
-  The list is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page
-  load, but that choice is never trusted as still valid once the run actually starts: the
-  background worker (`AnsibleRunWorker`) re-fetches running containers immediately before
-  building the `ansible-playbook` command and fails the job — without starting a process — if
-  the chosen container is no longer running or no running container still carries the chosen
-  tag. A tag is translated to the same group name Ansible's own `keyed_groups` would produce
-  (`AnsibleGroupName`, e.g. tag `mqtt` -> group `tag_mqtt`, matching the `tag` prefix configured
-  in `inventory/orchestrator.yml`), so `--limit tag_mqtt` matches the live inventory plugin's
-  groups.
+  The list is populated from a fresh `IProxmoxService.ListContainersAsync()` call on page load
+  (`RunTargetOptions.RunningContainers`, each with its own tags, for the checkbox rows and the tag
+  filter), but that choice is never trusted as still valid once the run actually starts: the
+  background worker (`AnsibleRunWorker`) re-fetches running containers immediately before building
+  the `ansible-playbook` command and fails the job — without starting a process — if a chosen
+  container is no longer running or no running container still carries a chosen tag. A tag is
+  translated to the same group name Ansible's own `keyed_groups` would produce (`AnsibleGroupName`,
+  e.g. tag `mqtt` -> group `tag_mqtt`, matching the `tag` prefix configured in
+  `inventory/orchestrator.yml`), so `--limit tag_mqtt` matches the live inventory plugin's groups.
 - **Execution** goes through the same job-queue/background-worker pattern as provisioning
-  (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and the
-  page polls its status over HTMX until it reaches `Succeeded` or `Failed`. `AnsibleProcessRunner`
-  is the only place that spawns `ansible-playbook`, via `ProcessStartInfo`/`ArgumentList` with
+  (`Services/Jobs/AnsibleRunJob*`, `AnsibleRunWorker`): submitting a run enqueues a job and
+  confirming it navigates the browser straight to that run's page under
+  [Job history](#job-history-implemented) (`/Executions/{id}`) — watching a run and launching one
+  are two separate screens, rather than one growing page. `AnsibleProcessRunner` is the only place
+  that spawns `ansible-playbook`, via `ProcessStartInfo`/`ArgumentList` with
   `UseShellExecute = false` — `-i <Ansible:InventoryFile>`, an optional `--limit <target>`, then
-  the resolved playbook path — and captures stdout/stderr line-by-line onto the job record.
-  Captured output is rendered with plain Razor interpolation (auto HTML-encoded), never
-  `Html.Raw`. A run that exceeds `Ansible:TimeoutSeconds` is killed (with its full process tree)
-  and the job fails.
-- **Output is shown structured, not as one flat scrolling stream.** `AnsibleOutputParser`
-  (`Services/Ansible/AnsibleOutputParser.cs`) re-parses the job's captured output on every render
-  into per-host, per-task results: a collapsible section per host (`<details>`, no JavaScript),
-  collapsed by default and auto-expanded only when that host has a failed or unreachable step,
-  with each step showing a spinner while still in progress, a check once it completes, or an X on
-  failure/unreachable, plus any `msg` text a task reported. Once `ansible-playbook` prints its
-  `PLAY RECAP`, a summary table (Ok/Changed/Unreachable/Failed/Skipped per host) appears below the
-  host sections. This is a best-effort parser of Ansible's own *default* plain-text stdout — not a
-  custom callback plugin — so an output shape it doesn't recognize simply isn't broken out into
-  steps; it's never lost, since the full raw output is still available (just collapsed by default)
-  underneath the structured view.
+  the resolved playbook path — and captures stdout/stderr line-by-line, tagged with which stream
+  each line came from. A run that exceeds `Ansible:TimeoutSeconds` is killed (with its full process
+  tree) and the job is marked `TimedOut`.
+- **Output is captured durably and shown structured, not as one flat scrolling stream that grows a
+  single in-memory string.** See [Job history](#job-history-implemented) for how output is
+  persisted; `AnsibleOutputParser` (`Services/Ansible/AnsibleOutputParser.cs`) turns that
+  reconstructed text into both a host-centric view (a collapsible section per host, `<details>`,
+  no JavaScript, collapsed by default and auto-expanded only when that host has a failed or
+  unreachable step) and a task-centric one (one row per task, aggregating every host's result for
+  it, with a failed row visible without expanding anything else) from the same underlying data.
+  Each step shows a spinner while still in progress, a check once it completes, or an X on
+  failure/unreachable, plus any `msg` text a task reported or, for a looped task, which item that
+  result was for. Once `ansible-playbook` prints its `PLAY RECAP`, a summary table
+  (Ok/Changed/Unreachable/Failed/Skipped per host) appears too. This is a best-effort parser of
+  Ansible's own *default* plain-text stdout — not a custom callback plugin — so an output shape it
+  doesn't recognize simply isn't broken out into steps; it's never lost, since the full raw output
+  is still available in its own tab.
 - **The SSH connectivity check** (`ansible/playbooks/ssh-check.yml`) is a safe, read-only
   playbook — `ansible.builtin.ping` followed by a debug message — suitable for verifying a
   container is reachable over SSH before running anything else against it; it makes no changes.
+
+## Job history (implemented)
+
+Ansible run history — both the execution record and its full captured output — is persisted in
+SQLite (via the same `ApplicationDbContext` Identity uses — one `DbContext`, not a second store)
+rather than only living in memory for the process's lifetime, and is browsable independently of
+launching a new run:
+
+- **`/Executions`** lists every run, most recent first (capped at the 100 most recent — a fixed
+  cap, not real pagination, matching this app's homelab scale elsewhere), with its playbook,
+  target, a status badge, duration, and exit code. Each row links to that run's own page.
+- **`/Executions/{id}`** is a wide, Rundeck/Semaphore-style execution page: a compact header
+  (playbook, status badge, requested target, resolved hosts, submitting user, submitted/started/
+  completed timestamps, duration, exit code, a sanitized error if any, **Run again** and
+  **Download log** actions), summary counts (hosts/tasks/changed/failed/unreachable), and three
+  tabs — **Tasks** (default), **Hosts**, and **Raw Output** (a fixed-height console with search,
+  line-wrap toggle, copy, and download). It transparently renders either an in-flight run (from the
+  in-memory `IAnsibleRunJobStore`) or an already-finished one loaded from SQLite, including after a
+  restart — `IAnsibleRunnerService.GetJobOrHistoryAsync` checks the in-memory store first and only
+  falls back to persisted history when a run isn't found there. **Run again** resubmits the exact
+  same request (same playbook, same target) as a brand-new execution and navigates to its page,
+  rather than resubmitting a raw form.
+
+  While a run is in flight, the header, the Tasks panel, the Hosts panel, and the console each poll
+  their own small HTMX fragment independently — never the whole page — so selected tab, the
+  "only failed" filter, and the console's scroll position all survive every poll. The console
+  specifically *appends* new lines rather than replacing itself, via a cursor
+  (`?handler=LogTail&after=<sequence>`) that only ever fetches entries newer than what's already
+  shown. Every fragment stops polling once the run reaches a terminal stage
+  (`Succeeded`/`Failed`/`TimedOut`/`Cancelled`/`Interrupted`).
+- **What's persisted, and when:** `IAnsibleExecutionStore`/`EfAnsibleExecutionStore`
+  (`Services/Ansible/`) save the execution row a small, bounded number of times — when it's queued,
+  when it starts running, and once more at its terminal state — never per captured output line.
+  Captured output is a separate, append-only `AnsibleExecutionLogs` table
+  (`IAnsibleExecutionLogStore`/`EfAnsibleExecutionLogStore`), written in batches (roughly every 40
+  lines or 300ms, whichever first) by `AnsibleExecutionLogBuffer` rather than one row per line, and
+  guaranteed to flush whatever's left when a run ends. The raw-output tab and the download both read
+  through `IAnsibleRunnerService.GetReconstructedOutputAsync`, which transparently serves the live
+  in-memory buffer while a run is in flight, the log table once it's finished, or (for a run
+  persisted before this table existed) the legacy output column as a fallback. Retention/pruning of
+  old history isn't implemented yet (an unbounded SQLite table); see Milestone 4 below.
+- **Lifecycle**: beyond `Queued`/`Running`/`Succeeded`/`Failed`, a run can end `TimedOut` (killed
+  for exceeding `Ansible:TimeoutSeconds`) or `Interrupted` (the orchestrator process stopped mid-run
+  — either shut down while the run was active, or, if the process was already stopped, a run left
+  `Queued`/`Running` in the database is swept to `Interrupted` at the next startup, so its page
+  doesn't poll forever). `Cancelled` exists in the model but has no way to be triggered yet — there
+  is no cancel action in this app. A failure to persist a run's history is always distinct from a
+  failure of the playbook itself: saving history failing never changes an already-determined
+  `Succeeded`/`Failed` outcome, and never stops the worker from picking up the next queued run.
+- The Ansible Runner page (`/Runner`) itself now only launches a run — submitting one navigates
+  the browser to its `/Executions/{id}` page rather than growing content on `/Runner` — plus shows
+  a small "Recent runs" teaser linking into the full history.
 
 ## Reconcile pre-existing containers (implemented)
 
@@ -671,12 +749,18 @@ The last three items need Ansible integration, which is a separate, larger piece
 
 ### Milestone 4: Operations hardening
 
-- [ ] Persist execution history in SQLite.
+- [x] Persist execution history in SQLite — see [Job history](#job-history-implemented).
 - [x] Add authentication and authorization — see [Authentication](#authentication-implemented).
       Scoped to a single seeded operator account with no self-registration; a multi-user/RBAC
       model was deliberately not built, since this app is meant for one operator.
-- [ ] Add cancellation and safe retry behavior.
-- [ ] Add retention rules for execution output.
+- [ ] Add cancellation and safe retry behavior. `AnsibleRunStage.Cancelled` and the
+      `TimedOut`/`Interrupted` terminal stages are modeled and exhaustively handled (see
+      [Job history](#job-history-implemented)), but there is still no operator-facing way to cancel
+      an in-flight run, and "safe retry" today is only **Run again** (a brand-new execution of the
+      same request), not a retry of the same run.
+- [ ] Add retention rules for execution output. Execution rows and their per-line output
+      (`AnsibleExecutionLogs`) are both durably persisted (see
+      [Job history](#job-history-implemented)) but never pruned — both tables grow without bound.
 - [ ] Package as a native systemd service.
 - [ ] Add health checks and structured logging.
 

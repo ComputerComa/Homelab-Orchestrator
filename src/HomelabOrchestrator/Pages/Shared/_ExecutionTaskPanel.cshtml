@@ -1,0 +1,22 @@
+@model HomelabOrchestrator.Pages.Executions.DetailsModel
+
+@{
+    var job = Model.Job!;
+}
+
+@if (job.IsFinished)
+{
+    <div id="tasks-panel" class="exec-tab-panel" data-tab-panel="tasks">
+        <partial name="Shared/_ExecutionTaskTable" model="Model.Parsed" />
+    </div>
+}
+else
+{
+    <div id="tasks-panel" class="exec-tab-panel" data-tab-panel="tasks"
+         hx-get="/Executions/Details/@job.Id?handler=TaskPanel"
+         hx-trigger="load delay:2s"
+         hx-target="#tasks-panel"
+         hx-swap="outerHTML">
+        <partial name="Shared/_ExecutionTaskTable" model="Model.Parsed" />
+    </div>
+}

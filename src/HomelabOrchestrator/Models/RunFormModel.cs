@@ -4,9 +4,10 @@ using HomelabOrchestrator.Services.Jobs;
 namespace HomelabOrchestrator.Models;
 
 /// <summary>
-/// The runner's form. <see cref="Target"/> is a single encoded choice from one picker —
-/// "all", "vm:&lt;hostname&gt;", or "tag:&lt;tag&gt;" — so the page needs no client-side script
-/// to keep a target-kind radio and its matching value select in sync.
+/// The runner's form. <see cref="Target"/> is a single encoded choice — "all", "vm:&lt;hostname&gt;",
+/// "tag:&lt;tag&gt;", or "selection:&lt;host1&gt;,&lt;host2&gt;,..." — computed client-side from the
+/// checkbox panel (see wwwroot/js/runner.js) into one hidden field, so the page model still only
+/// ever binds one string.
 /// </summary>
 public class RunFormModel
 {
@@ -28,6 +29,7 @@ public class RunFormModel
         {
             ["vm", var value] => (AnsibleRunTargetKind.Vm, value),
             ["tag", var value] => (AnsibleRunTargetKind.TagGroup, value),
+            ["selection", var value] => (AnsibleRunTargetKind.Selection, value),
             _ => (AnsibleRunTargetKind.All, null),
         };
     }

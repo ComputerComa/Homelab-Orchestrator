@@ -47,5 +47,28 @@ public class PlaybookCatalog(IOptions<AnsibleOptions> options) : IPlaybookCatalo
         return candidate.StartsWith(normalizedDirectory, StringComparison.Ordinal) ? candidate : null;
     }
 
+    public async Task<PlaybookDetail?> GetDetailAsync(string name, CancellationToken cancellationToken = default)
+    {
+        var path = await ResolvePathAsync(name, cancellationToken);
+        if (path is null)
+        {
+            return null;
+        }
+
+        var yaml = await File.ReadAllTextAsync(path, cancellationToken);
+
+        var roleTasksYaml = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var role in PlaybookMetadataParser.ExtractRoleNames(yaml))
+        {
+            var rolePath = Path.Combine(_options.RepositoryRoot, "roles", role, "tasks", "main.yml");
+            if (File.Exists(rolePath))
+            {
+                roleTasksYaml[role] = await File.ReadAllTextAsync(rolePath, cancellationToken);
+            }
+        }
+
+        return PlaybookMetadataParser.Parse(name, yaml, roleTasksYaml);
+    }
+
     private string PlaybooksDirectory() => Path.Combine(_options.RepositoryRoot, "playbooks");
 }

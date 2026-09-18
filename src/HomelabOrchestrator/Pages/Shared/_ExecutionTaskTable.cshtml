@@ -1,0 +1,63 @@
+@using HomelabOrchestrator.Models
+@model AnsibleRunParsedState
+
+@functions {
+    static int CountStatus(AnsibleTaskSummary task, AnsibleStepStatus status) =>
+        task.HostResults.Sum(h => h.Results.Count(r => r.Status == status));
+
+    static string StepLabel(string hostname, AnsibleTaskStep step) =>
+        step.LoopItem is null ? hostname : $"{hostname} (item={step.LoopItem})";
+}
+
+@if (Model.Tasks.Count == 0)
+{
+    <p class="muted">No tasks reported yet.</p>
+}
+else
+{
+    <table class="data-table task-table">
+        <thead>
+            <tr>
+                <th>Task</th>
+                <th>Ok</th>
+                <th>Changed</th>
+                <th>Skipped</th>
+                <th>Failed</th>
+                <th>Unreachable</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var task in Model.Tasks)
+            {
+                <tr class="task-row @(task.HasFailure ? "task-row-failed" : "")">
+                    <td>
+                        <details open="@task.HasFailure" data-task-name="@task.TaskName">
+                            <summary>@task.TaskName</summary>
+                            <ul class="step-list">
+                                @foreach (var hostResult in task.HostResults)
+                                {
+                                    @foreach (var step in hostResult.Results)
+                                    {
+                                        <li class="step step-@step.Status.ToString().ToLowerInvariant()">
+                                            <span class="step-icon" aria-hidden="true"></span>
+                                            <span class="step-task">@StepLabel(hostResult.Hostname, step)</span>
+                                            @if (!string.IsNullOrEmpty(step.Detail))
+                                            {
+                                                <span class="step-detail">@step.Detail</span>
+                                            }
+                                        </li>
+                                    }
+                                }
+                            </ul>
+                        </details>
+                    </td>
+                    <td>@CountStatus(task, AnsibleStepStatus.Ok)</td>
+                    <td>@CountStatus(task, AnsibleStepStatus.Changed)</td>
+                    <td>@CountStatus(task, AnsibleStepStatus.Skipped)</td>
+                    <td>@CountStatus(task, AnsibleStepStatus.Failed)</td>
+                    <td>@CountStatus(task, AnsibleStepStatus.Unreachable)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}

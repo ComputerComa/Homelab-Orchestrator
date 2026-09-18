@@ -1,0 +1,24 @@
+@using HomelabOrchestrator.Models
+@using HomelabOrchestrator.Services.Ansible
+@model HomelabOrchestrator.Pages.Executions.DetailsModel
+
+@{
+    var job = Model.Job!;
+}
+
+@if (job.IsFinished)
+{
+    <div id="execution-status">
+        <partial name="Shared/_ExecutionHeaderStatusContent" model="Model" />
+    </div>
+}
+else
+{
+    <div id="execution-status"
+         hx-get="/Executions/Details/@job.Id?handler=HeaderStatus"
+         hx-trigger="load delay:2s"
+         hx-target="#execution-status"
+         hx-swap="outerHTML">
+        <partial name="Shared/_ExecutionHeaderStatusContent" model="Model" />
+    </div>
+}

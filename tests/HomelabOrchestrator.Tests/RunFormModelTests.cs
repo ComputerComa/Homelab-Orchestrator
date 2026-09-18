@@ -29,6 +29,14 @@ public class RunFormModelTests
         Assert.Equal((AnsibleRunTargetKind.TagGroup, "mqtt"), form.ParseTarget());
     }
 
+    [Fact]
+    public void ParseTarget_reads_a_selection_target()
+    {
+        var form = new RunFormModel { Target = "selection:web-01,cache-01" };
+
+        Assert.Equal((AnsibleRunTargetKind.Selection, "web-01,cache-01"), form.ParseTarget());
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("garbage")]

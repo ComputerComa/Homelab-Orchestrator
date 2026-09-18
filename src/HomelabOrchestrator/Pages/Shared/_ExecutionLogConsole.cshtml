@@ -1,0 +1,17 @@
+@model HomelabOrchestrator.Pages.Executions.DetailsModel
+
+@{
+    var job = Model.Job!;
+}
+
+<div id="raw-panel" class="exec-tab-panel" data-tab-panel="raw">
+    <div class="log-console-toolbar">
+        <input type="search" id="log-search" class="log-search" placeholder="Search output&hellip;" />
+        <label class="checkbox"><input type="checkbox" id="log-wrap" /> Wrap</label>
+        <button type="button" id="log-copy" class="btn btn-secondary btn-small">Copy</button>
+        <a class="btn btn-secondary btn-small" href="/Executions/Details/@job.Id?handler=DownloadLog">Download</a>
+    </div>
+    <div id="log-console" class="log-console">
+        <partial name="Shared/_ExecutionLogTail" model="new HomelabOrchestrator.Pages.Executions.ExecutionLogTailViewModel(job, Model.InitialLogEntries, 0)" />
+    </div>
+</div>
