@@ -16,6 +16,7 @@
             <a href="/Runner" class="@(Context.Request.Path.StartsWithSegments("/Runner") ? "active" : "")">Ansible Runner</a>
             <a href="/Executions" class="@(Context.Request.Path.StartsWithSegments("/Executions") ? "active" : "")">Job History</a>
             <a href="/Reconcile" class="@(Context.Request.Path.StartsWithSegments("/Reconcile") ? "active" : "")">Reconcile</a>
+            <a href="/SshKeys" class="@(Context.Request.Path.StartsWithSegments("/SshKeys") ? "active" : "")">SSH Keys</a>
             @if (User.Identity?.IsAuthenticated == true)
             {
                 <a href="/Account/ChangePassword" class="@(Context.Request.Path.StartsWithSegments("/Account/ChangePassword") ? "active" : "")">Change password</a>

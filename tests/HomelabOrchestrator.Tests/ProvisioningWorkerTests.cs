@@ -100,5 +100,8 @@ public class ProvisioningWorkerTests
             CallCount++;
             return Task.FromResult(keys);
         }
+
+        public Task<string?> GetOrchestratorPublicKeyAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

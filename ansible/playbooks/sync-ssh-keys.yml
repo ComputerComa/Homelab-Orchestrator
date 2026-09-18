@@ -1,0 +1,11 @@
+---
+# Pushes the current enabled-key set from the SSH key registry to every targeted managed
+# container. Never invoked with keys/credentials on the command line: the extra-vars
+# (sync_ssh_keys_authorized_keys, sync_ssh_keys_exclusive) are passed via `--extra-vars @<file>`,
+# a private, restrictive-permission temporary file the orchestrator writes and deletes per run.
+- name: Synchronize enrolled SSH public keys to managed containers
+  hosts: all
+  become: false
+  gather_facts: false
+  roles:
+    - sync_ssh_keys

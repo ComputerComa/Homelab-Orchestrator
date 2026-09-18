@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HomelabOrchestrator.Models;
 using HomelabOrchestrator.Services.Ansible;
 using HomelabOrchestrator.Services.Proxmox;
@@ -54,12 +55,18 @@ public class AnsibleRunWorker(
             var logBuffer = new AnsibleExecutionLogBuffer(jobId, logStore, logger);
             store.AttachLiveLog(jobId, logBuffer);
             var flushLoop = logBuffer.RunFlushLoopAsync(cancellationToken);
+
+            string? extraVarsFilePath = job.Request.ExtraVars is { Count: > 0 } extraVars
+                ? await WriteExtraVarsFileAsync(jobId, extraVars, cancellationToken)
+                : null;
+
             int exitCode;
             try
             {
                 exitCode = await processRunner.RunPlaybookAsync(
                     playbookPath,
                     limit,
+                    extraVarsFilePath,
                     (stream, line) => logBuffer.Enqueue(stream, line),
                     cancellationToken);
             }
@@ -68,6 +75,11 @@ public class AnsibleRunWorker(
                 logBuffer.Complete();
                 await flushLoop;
                 store.DetachLiveLog(jobId);
+
+                if (extraVarsFilePath is not null)
+                {
+                    TryDeleteExtraVarsDirectory(Path.GetDirectoryName(extraVarsFilePath)!, jobId);
+                }
             }
 
             outcome = store.Update(jobId, j => j with
@@ -137,6 +149,42 @@ public class AnsibleRunWorker(
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to persist execution history for Ansible run {JobId} (stage {Stage})", job.Id, job.Stage);
+        }
+    }
+
+    /// <summary>
+    /// Writes extra-vars as JSON beneath /run/homelab-orchestrator/&lt;execution-id&gt;/, restricted
+    /// to 0700 (directory) / 0600 (file) — never world- or group-readable, since this may contain
+    /// key material. Cleaned up by the caller's <c>finally</c> block, never left behind.
+    /// </summary>
+    private static async Task<string> WriteExtraVarsFileAsync(Guid jobId, IReadOnlyDictionary<string, object?> extraVars, CancellationToken cancellationToken)
+    {
+        var directory = Path.Combine("/run/homelab-orchestrator", jobId.ToString("N"));
+        Directory.CreateDirectory(directory);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        var path = Path.Combine(directory, "extra-vars.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(extraVars), cancellationToken);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        return path;
+    }
+
+    private void TryDeleteExtraVarsDirectory(string directory, Guid jobId)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Failed to delete extra-vars temp directory for Ansible run {JobId}", jobId);
         }
     }
 

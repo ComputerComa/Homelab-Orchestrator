@@ -186,9 +186,11 @@ homelab-orchestrator/
 |-- HomelabOrchestrator.sln
 |-- src/
 |   `-- HomelabOrchestrator/
+|       |-- Authentication/
 |       |-- Authorization/
 |       |-- Data/
 |       |   `-- Migrations/
+|       |-- Endpoints/
 |       |-- Models/
 |       |-- Options/
 |       |-- Pages/
@@ -198,10 +200,12 @@ homelab-orchestrator/
 |       |   |-- Reconcile/
 |       |   |-- Maintenance/
 |       |   |-- Playbooks/
-|       |   `-- Executions/
+|       |   |-- Executions/
+|       |   `-- SshKeys/
 |       |-- Services/
 |       |   |-- Proxmox/
 |       |   |-- Ansible/
+|       |   |-- Ssh/
 |       |   `-- Jobs/
 |       `-- wwwroot/
 |-- ansible/
@@ -210,14 +214,18 @@ homelab-orchestrator/
 |   |-- playbooks/
 |   |   |-- apply-base.yml
 |   |   |-- ssh-check.yml
+|   |   |-- sync-ssh-keys.yml
 |   |   |-- maintenance/
 |   |   `-- catalog/
 |   `-- roles/
-|       `-- base/
+|       |-- base/
+|       |   |-- defaults/main.yml
+|       |   |-- handlers/main.yml
+|       |   |-- tasks/main.yml
+|       |   `-- templates/
+|       `-- sync_ssh_keys/
 |           |-- defaults/main.yml
-|           |-- handlers/main.yml
-|           |-- tasks/main.yml
-|           `-- templates/
+|           `-- tasks/main.yml
 `-- tests/
     `-- HomelabOrchestrator.Tests/
 ```
@@ -286,6 +294,9 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
     "InventoryFile": "inventory/orchestrator.yml",
     "TimeoutSeconds": 600
   },
+  "SshSync": {
+    "Exclusive": false
+  },
   "ConnectionStrings": {
     "Default": ""
   },
@@ -295,6 +306,10 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
   }
 }
 ```
+
+`SshSync:Exclusive` governs how `sync-ssh-keys.yml` reconciles `/root/.ssh/authorized_keys` on
+managed containers — see [SSH key registry, enrollment, and sync](#ssh-key-registry-enrollment-and-sync-implemented)
+below. Leave it `false` until the registry is confirmed to hold every key that should have access.
 
 `Ansible:RepositoryRoot` left blank (the default) resolves to the `ansible/` directory that ships
 alongside `src/` and `tests/` in this repository; set it explicitly if a deployment lays out
@@ -314,11 +329,12 @@ export Proxmox__ApiToken='automation@pve!homelab-orchestrator=TOKEN_SECRET'
 
 Never commit real tokens, passwords, private SSH keys, generated inventory, or playbook extra-variable files.
 
-## SSH key management
+## SSH key management (provisioning time)
 
 The orchestrator runs as root inside its own LXC, and provisioning uses that root account's own
-SSH material — there is no SSH field anywhere in the web UI, and no key ever passes through the
-browser or is stored on a job record.
+SSH material — there is no SSH field anywhere in the provisioning UI, and no key ever passes
+through the browser or is stored on a job record. This mechanism only affects **new** containers
+at creation time; see the next section for granting access to already-running containers.
 
 - **Workstation keys** (yours and anyone else who should be able to log into new containers) go
   in `/root/.ssh/authorized_keys` on the orchestrator, one public key per line — exactly like any
@@ -340,6 +356,66 @@ browser or is stored on a job record.
 - Editing either source file only affects **containers created afterward**. Existing containers
   keep whatever keys they were built with; update `authorized_keys` on a running container the
   same way you would on any other Linux host.
+
+## SSH key registry, enrollment, and sync (implemented)
+
+A second, separate mechanism grants an **already-running** container SSH access without
+re-provisioning it: a DB-backed registry of enrolled device keys, reviewed and approved by the
+operator, then pushed out on demand through the normal Ansible execution pipeline. This is
+additive to — and does not replace — the provisioning-time mechanism above.
+
+- **A device enrolls itself.** From the `/SshKeys` page, "Create enrollment token" generates a
+  cryptographically random, single-use token good for about 10 minutes, shown in plaintext exactly
+  once (only its hash is ever stored). The device then submits its own public key:
+
+  ```bash
+  curl -X POST https://<orchestrator-host>/api/ssh-keys/enroll \
+    -H "Authorization: Bearer <token>" \
+    -H "Content-Type: application/json" \
+    -d "{\"deviceName\": \"my-laptop\", \"publicKey\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
+  ```
+
+  This reads and sends the contents of the local **public** key file only — the private key never
+  leaves the device, and the `.pub` filename itself is irrelevant, only its content is submitted.
+  `POST /api/ssh-keys/enroll` authenticates the bearer token through a second, additional
+  authentication scheme used nowhere else in the app (the operator's own sign-in cookie plays no
+  part here), is rate-limited and size-capped, accepts only `ssh-ed25519` (preferred), ECDSA, or
+  RSA with a modulus of at least 3072 bits, rejects anything that looks like private-key material,
+  discards any comment in the submitted key, computes the key's fingerprint itself
+  (`SHA256:<...>`, the same format `ssh-keygen -lf` prints), rejects a fingerprint already on file,
+  and returns that fingerprint so the operator can compare it against what the device reports —
+  compare it before approving. Enrolling only ever creates a **Pending** key; it never grants
+  access and never triggers a sync by itself.
+- **The operator reviews and approves.** `/SshKeys` lists Pending, Enabled, and Revoked keys by
+  friendly device name and fingerprint. Approving, revoking, and synchronizing all show an
+  explicit warning and a confirm step first: approving a key grants it SSH access **once you
+  synchronize**, not immediately; revoking only takes effect on the **next** synchronization; a
+  Pending key that was never approved can be deleted outright with no confirmation, since it never
+  had access. Only the fingerprint and an operator-chosen device name are ever shown or stored —
+  never the original comment from the submitted key.
+- **"Synchronize now" pushes the current Enabled-key set to every managed container** through the
+  same Ansible execution pipeline every other playbook run uses — it shows up as a normal,
+  browsable run under [Job history](#job-history-implemented) with live output, not a hidden
+  side-channel. The orchestrator's own public key is always included in the payload, and the run
+  is refused before it starts if that key can't be read — synchronizing can never lock the
+  orchestrator's own automation out of the containers it manages. Keys and the exclusive-mode
+  setting are passed to Ansible as a private, restrictive-permission (`0600`) temporary
+  `--extra-vars @<file>`, never as command-line arguments, and the file is deleted immediately
+  after the run finishes, success or failure.
+- **`ansible/roles/sync_ssh_keys`** ensures `/root/.ssh` exists (`0700`), renders one normalized
+  key per line with an opaque `homelab-orchestrator-managed-<id>` comment (never the device name
+  or original comment), and either merges that block into `authorized_keys` alongside whatever
+  else is already there (default, `SshSync:Exclusive: false`) or atomically replaces the whole
+  file with exactly that block (`SshSync:Exclusive: true`) — validating the rendered content and
+  setting `root:root 0600` either way. Exclusive mode has its own pre-flight guard: the run refuses
+  outright if the orchestrator's own managed key isn't present in the payload. After writing,
+  the role re-verifies the connection is still reachable over SSH before reporting success, and
+  Ansible's own per-host failure reporting (visible in that run's Tasks/Hosts view) shows exactly
+  which containers succeeded or failed.
+- **Rollout guidance:** leave `SshSync:Exclusive` at its default (`false`, merge/preserve) while
+  building out the registry, so any key already on a container stays there. Only flip it to `true`
+  once you've confirmed the registry holds every key that should have access — from that point on,
+  a key present on a container but missing from the registry is removed on the next sync.
 
 ## Dynamic Ansible inventory
 

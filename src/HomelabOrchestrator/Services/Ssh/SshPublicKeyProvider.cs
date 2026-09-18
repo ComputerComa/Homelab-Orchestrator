@@ -34,6 +34,14 @@ public class SshPublicKeyProvider(IOptions<SshOptions> options, ILogger<SshPubli
         return string.Join('\n', keys);
     }
 
+    public async Task<string?> GetOrchestratorPublicKeyAsync(CancellationToken cancellationToken = default)
+    {
+        var seen = new HashSet<SshPublicKeyRecord>();
+        var keys = new List<string>();
+        await CollectKeysAsync(_options.OrchestratorPublicKeyPath, seen, keys, cancellationToken);
+        return keys.Count > 0 ? keys[0] : null;
+    }
+
     private async Task CollectKeysAsync(string path, HashSet<SshPublicKeyRecord> seen, List<string> keys, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))

@@ -249,6 +249,52 @@ public class AnsibleRunWorkerTests
     }
 
     [Fact]
+    public async Task ExtraVars_temp_file_exists_with_restrictive_permissions_while_running_and_is_deleted_after_the_run_finishes()
+    {
+        var (worker, store, queue, process, _, _) = Build(RunningContainers, exitCode: 0, hangUntilCancelled: true);
+        var request = new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null, new Dictionary<string, object?> { ["foo"] = "bar" });
+
+        var job = store.Create(request);
+        await queue.EnqueueAsync(job.Id);
+        await worker.StartAsync(CancellationToken.None);
+
+        await process.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var path = process.LastExtraVarsFilePath;
+        Assert.NotNull(path);
+        Assert.True(File.Exists(path));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        var directory = Path.GetDirectoryName(path)!;
+
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.False(Directory.Exists(directory));
+    }
+
+    [Fact]
+    public async Task ExtraVars_temp_directory_is_deleted_even_when_the_process_runner_throws()
+    {
+        var (worker, store, queue, process, _, _) = Build(RunningContainers, exitCode: 0, throwException: new InvalidOperationException("boom"));
+        var request = new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null, new Dictionary<string, object?> { ["foo"] = "bar" });
+
+        var job = await RunAsync(worker, store, queue, request);
+
+        Assert.Equal(AnsibleRunStage.Failed, job.Stage);
+        var path = process.LastExtraVarsFilePath;
+        Assert.NotNull(path);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
+    }
+
+    [Fact]
+    public async Task No_extra_vars_file_is_created_when_the_request_has_none()
+    {
+        var (worker, store, queue, process, _, _) = Build(RunningContainers, exitCode: 0);
+
+        await RunAsync(worker, store, queue, new AnsibleRunRequest("ssh-check", AnsibleRunTargetKind.All, null));
+
+        Assert.Null(process.LastExtraVarsFilePath);
+    }
+
+    [Fact]
     public async Task Stopping_the_worker_mid_run_marks_the_job_Interrupted()
     {
         var (worker, store, queue, process, _, _) = Build(RunningContainers, exitCode: 0, hangUntilCancelled: true);
@@ -354,15 +400,17 @@ public class AnsibleRunWorkerTests
     {
         public bool WasInvoked { get; private set; }
         public string? LastLimit { get; private set; }
+        public string? LastExtraVarsFilePath { get; private set; }
 
         /// <summary>Signaled once <see cref="RunPlaybookAsync"/> starts — lets a test know it's safe to cancel while <paramref name="hangUntilCancelled"/> keeps it running.</summary>
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<int> RunPlaybookAsync(
-            string playbookPath, string? limit, Action<AnsibleLogStream, string> onOutputLine, CancellationToken cancellationToken = default)
+            string playbookPath, string? limit, string? extraVarsFilePath, Action<AnsibleLogStream, string> onOutputLine, CancellationToken cancellationToken = default)
         {
             WasInvoked = true;
             LastLimit = limit;
+            LastExtraVarsFilePath = extraVarsFilePath;
             Started.TrySetResult();
 
             if (throwException is not null)

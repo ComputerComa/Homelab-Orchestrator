@@ -1,0 +1,51 @@
+---
+# Generates the complete managed authorized_keys content and atomically replaces (exclusive mode)
+# or merges (default mode) it into /root/.ssh/authorized_keys. Idempotent: re-running with the
+# same sync_ssh_keys_authorized_keys produces no changes on the second run.
+- name: Refuse exclusive synchronization if the orchestrator's own key is missing
+  ansible.builtin.assert:
+    that: sync_ssh_keys_authorized_keys | select('search', 'homelab-orchestrator-managed-self') | list | length > 0
+    fail_msg: >-
+      Exclusive SSH key sync refused: the orchestrator's own managed key is not present in
+      sync_ssh_keys_authorized_keys. Running this would remove the orchestrator's own access.
+  when: sync_ssh_keys_exclusive | bool
+  run_once: true
+
+- name: Ensure /root/.ssh exists with correct permissions
+  ansible.builtin.file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Render the managed authorized_keys content
+  ansible.builtin.set_fact:
+    sync_ssh_keys_rendered: "{{ (sync_ssh_keys_authorized_keys | join('\n')) + '\n' }}"
+
+- name: Atomically replace /root/.ssh/authorized_keys with the registry's keys only (exclusive mode)
+  ansible.builtin.copy:
+    content: "{{ sync_ssh_keys_rendered }}"
+    dest: /root/.ssh/authorized_keys
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "test -s %s"
+  when: sync_ssh_keys_exclusive | bool
+
+- name: Merge managed keys into authorized_keys, preserving unmanaged entries (default mode)
+  ansible.builtin.blockinfile:
+    path: /root/.ssh/authorized_keys
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK (homelab-orchestrator)"
+    block: "{{ sync_ssh_keys_rendered }}"
+  when: not (sync_ssh_keys_exclusive | bool)
+
+- name: Verify SSH remains reachable after synchronization
+  ansible.builtin.wait_for_connection:
+    connect_timeout: 5
+    sleep: 2
+    timeout: 30

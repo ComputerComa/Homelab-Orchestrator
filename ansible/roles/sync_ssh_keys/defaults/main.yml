@@ -1,0 +1,9 @@
+---
+# One normalized "<type> <base64-data> <opaque-comment>" line per enabled registry key, plus the
+# orchestrator's own key — rendered by SshKeyManagementService.SyncAsync, never edited by hand.
+sync_ssh_keys_authorized_keys: []
+
+# false (default, safe): merge into a managed block, preserving any unmanaged keys already on the
+# container. true: replace the whole file with exactly this list — refused unless the
+# orchestrator's own key is present (see tasks/main.yml's pre-flight assert).
+sync_ssh_keys_exclusive: false
