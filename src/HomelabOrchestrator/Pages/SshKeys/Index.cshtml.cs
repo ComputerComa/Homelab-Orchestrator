@@ -91,7 +91,21 @@ public class IndexModel(ISshKeyManagementService keyManagement, IOptions<SshSync
 
     public async Task<IActionResult> OnPostSyncConfirmAsync(CancellationToken cancellationToken)
     {
-        var executionId = await keyManagement.SyncAsync(User.Identity?.Name, cancellationToken);
+        Guid executionId;
+        try
+        {
+            executionId = await keyManagement.SyncAsync(User.Identity?.Name, cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The mandatory lockout guard: SyncAsync refuses to submit anything if the
+            // orchestrator's own key can't be read or parsed. Surface that as a clear banner
+            // instead of a raw 500 — this is an expected, actionable operator-facing condition.
+            logger.LogWarning(ex, "Refused to queue SSH key synchronization");
+            ModelState.AddModelError(string.Empty, ex.Message);
+            return Partial("Shared/_ValidationErrors", ModelState);
+        }
+
         logger.LogInformation("Queued SSH key synchronization {ExecutionId}", executionId);
 
         // Same "force a real navigation" trick Runner's OnPostRunAsync uses — a sync is a normal,
