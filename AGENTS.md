@@ -295,6 +295,16 @@ radio inputs outside every polled fragment, so a poll never resets which tab is 
 needs to update live means adding a fifth small fragment, not folding it into an existing one or
 reintroducing a whole-page poll.
 
+Each Tasks/Hosts panel poll still does a full `hx-swap="outerHTML"` of that panel, though — the
+server has no idea which `<details>` rows an operator has manually expanded or collapsed, and a
+fresh render only auto-opens a row that's *currently* failing. `wwwroot/js/execution-tab-state.js`
+is what makes a manual toggle survive that anyway: it records every `<details data-task-name="...">`/
+`<details data-hostname="...">` row's open/closed state on the (capture-phase, since `toggle`
+doesn't bubble everywhere) `toggle` event, and reapplies it after every `htmx:afterSwap` — a row's
+own explicit user override always wins over the server's failure-based default. A new kind of
+`<details>` row anywhere on this page needs the same `data-*` key and nothing else; don't reach for
+an htmx morph extension or a bigger client-side framework just to solve this one thing.
+
 ## Authentication
 
 The app supports exactly one operator account. There is no self-registration page and no

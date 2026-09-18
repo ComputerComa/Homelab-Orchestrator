@@ -31,7 +31,7 @@ else
             {
                 <tr class="task-row @(task.HasFailure ? "task-row-failed" : "")">
                     <td>
-                        <details open="@task.HasFailure">
+                        <details open="@task.HasFailure" data-task-name="@task.TaskName">
                             <summary>@task.TaskName</summary>
                             <ul class="step-list">
                                 @foreach (var hostResult in task.HostResults)

@@ -14,7 +14,7 @@ else
 {
     @foreach (var host in Model.Hosts)
     {
-        <details class="host-section @(host.HasFailure ? "host-failed" : "")" open="@host.HasFailure">
+        <details class="host-section @(host.HasFailure ? "host-failed" : "")" open="@host.HasFailure" data-hostname="@host.Hostname">
             <summary>
                 <strong>@host.Hostname</strong>
                 <span class="muted">(@host.Steps.Count)</span>
