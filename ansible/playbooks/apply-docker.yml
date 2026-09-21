@@ -1,0 +1,8 @@
+---
+- name: Install Docker on a managed container
+  hosts: all
+  become: false
+  gather_facts: true
+
+  roles:
+    - docker

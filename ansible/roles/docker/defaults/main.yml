@@ -1,0 +1,18 @@
+# ansible/roles/docker/defaults/main.yml
+---
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Optional non-root users that should be allowed to use Docker.
+# Empty by default because most of your managed LXCs are administered as root.
+docker_users: []
+
+# Whether the role should manage Docker's daemon.json.
+# Leave off initially; we can enable this later for log rotation, etc.
+docker_manage_daemon_config: false
+
+docker_daemon_config: {}
