@@ -22,7 +22,7 @@ public class ProxmoxOptions
     public string RootfsStorage { get; set; } = "local-lvm";
     public string Bridge { get; set; } = "vmbr0";
     public string Gateway { get; set; } = "10.0.1.1";
-    public string[] NameServers { get; set; } = ["10.0.200.1", "10.0.200.2"];
+    public string[] NameServers { get; set; } = [];
     public int Subnet { get; set; } = 16;
 
     /// <summary>First three octets of the network used to derive a container's address from its VMID (e.g. "10.0.150").</summary>

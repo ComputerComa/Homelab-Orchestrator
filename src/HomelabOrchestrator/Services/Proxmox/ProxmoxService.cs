@@ -94,7 +94,9 @@ public class ProxmoxService : IProxmoxService
                 memory: request.MemoryMB,
                 swap: request.SwapMB,
                 netN: new Dictionary<int, string> { [0] = netConfig },
-                nameserver: string.Join(' ', _options.NameServers),
+                nameserver: _options.NameServers.Length > 0
+    ? string.Join(' ', _options.NameServers)
+    : null,
                 unprivileged: true,
                 onboot: request.StartAtBoot,
                 start: request.Start,
