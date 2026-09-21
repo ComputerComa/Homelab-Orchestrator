@@ -1,0 +1,171 @@
+@page
+@model IndexModel
+
+<h2>SSH Keys</h2>
+
+<p class="muted">
+    A device enrolls its own public key using a short-lived, single-use token. It stays
+    <strong>Pending</strong> — no access granted — until you approve it here after confirming the
+    fingerprint matches what the device reported. Approving does not push anything anywhere; you
+    still need to <strong>Synchronize</strong> for an approved key to actually reach any container.
+</p>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Enroll a new device</h2>
+        <form hx-post
+              hx-page="Index"
+              hx-page-handler="CreateToken"
+              hx-target="#result"
+              hx-swap="innerHTML"
+              hx-indicator="#spinner">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-primary btn-small">Create enrollment token</button>
+        </form>
+    </div>
+    <p class="muted">
+        Creates a token valid for about 10 minutes and for one enrollment only. The device uses it
+        to submit its own public key, which then shows up below as Pending.
+    </p>
+</div>
+
+<div id="result"></div>
+<span id="spinner" class="htmx-indicator">Working&hellip;</span>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Pending (@Model.PendingKeys.Count)</h2>
+    </div>
+    @if (Model.PendingKeys.Count == 0)
+    {
+        <p class="muted">No keys awaiting approval.</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Device</th>
+                    <th>Algorithm</th>
+                    <th>Fingerprint</th>
+                    <th>Submitted</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var key in Model.PendingKeys)
+                {
+                    <tr>
+                        <td>@key.DeviceName</td>
+                        <td>@key.Algorithm</td>
+                        <td><code>@key.Fingerprint</code></td>
+                        <td>@key.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                        <td class="actions">
+                            <form hx-post hx-page="Index" hx-page-handler="ApproveReview" hx-target="#result" hx-swap="innerHTML">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="keyId" value="@key.Id" />
+                                <button type="submit" class="btn btn-primary btn-small">Approve</button>
+                            </form>
+                            <form method="post" asp-page-handler="DeletePending">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="keyId" value="@key.Id" />
+                                <button type="submit" class="btn btn-secondary btn-small">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Enabled (@Model.EnabledKeys.Count)</h2>
+        <form hx-post
+              hx-page="Index"
+              hx-page-handler="SyncReview"
+              hx-target="#result"
+              hx-swap="innerHTML"
+              hx-indicator="#spinner">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-primary btn-small">Synchronize now</button>
+        </form>
+    </div>
+    @if (Model.EnabledKeys.Count == 0)
+    {
+        <p class="muted">No enabled keys yet.</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Device</th>
+                    <th>Algorithm</th>
+                    <th>Fingerprint</th>
+                    <th>Approved</th>
+                    <th>Approved by</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var key in Model.EnabledKeys)
+                {
+                    <tr>
+                        <td>@key.DeviceName</td>
+                        <td>@key.Algorithm</td>
+                        <td><code>@key.Fingerprint</code></td>
+                        <td>@key.ApprovedAtUtc?.ToLocalTime().ToString("g")</td>
+                        <td>@key.ApprovedBy</td>
+                        <td class="actions">
+                            <form hx-post hx-page="Index" hx-page-handler="RevokeReview" hx-target="#result" hx-swap="innerHTML">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="keyId" value="@key.Id" />
+                                <button type="submit" class="btn btn-secondary btn-small">Revoke</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Revoked (@Model.RevokedKeys.Count)</h2>
+    </div>
+    @if (Model.RevokedKeys.Count == 0)
+    {
+        <p class="muted">No revoked keys.</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Device</th>
+                    <th>Algorithm</th>
+                    <th>Fingerprint</th>
+                    <th>Revoked</th>
+                    <th>Revoked by</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var key in Model.RevokedKeys)
+                {
+                    <tr class="ineligible">
+                        <td>@key.DeviceName</td>
+                        <td>@key.Algorithm</td>
+                        <td><code>@key.Fingerprint</code></td>
+                        <td>@key.RevokedAtUtc?.ToLocalTime().ToString("g")</td>
+                        <td>@key.RevokedBy</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+<script src="~/js/ssh-keys.js" asp-append-version="true"></script>

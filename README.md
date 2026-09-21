@@ -15,19 +15,22 @@ This project intentionally does not use OpenTofu or maintain a static Ansible in
 
 ## Status
 
-Milestone 1 (provisioning parity) is implemented except for the two steps that depend on
-Ansible, which does not exist in this repository yet: waiting for SSH and applying the
-`base` role. Today, from the web UI, an operator can:
+Milestone 1 (provisioning parity) is fully implemented. Today, from the web UI, an operator can:
 
 - see the next available VMID, the address it maps to, and the newest Debian 13 template,
   refreshed on demand;
 - submit a hostname and sizing, review a summary, and confirm — there is no SSH key field;
   containers trust the orchestrator's own combined public keys (see
-  [SSH key management](#ssh-key-management));
+  [SSH key management](#ssh-key-management-provisioning-time));
 - have the request queued and executed by a background worker that recalculates the
   VMID/address/template itself immediately before creating anything — the browser preview
   shown earlier is never trusted or reused;
-- watch the job's stage update live over HTMX polling until it succeeds or fails.
+- watch the job's stage update live over HTMX polling as it waits for Proxmox, then (for a
+  container started at creation) waits for the container to accept SSH connections, applies the
+  Ansible `base` role, and synchronizes the current SSH key registry to just that one container —
+  see [SSH key registry, enrollment, and sync](#ssh-key-registry-enrollment-and-sync-implemented) —
+  before succeeding or failing. A failure in any of the post-creation steps never deletes the
+  LXC; it's retried with the same Runner/SSH Keys page actions used for any other container.
 
 Outside the web UI, two JSON endpoints generate a standard Ansible dynamic inventory for a single
 container or for every currently running one, and a matching custom Ansible inventory plugin
@@ -86,7 +89,7 @@ The server determines:
 - node, storage, bridge, subnet, gateway, and DNS configuration;
 - the newest available Debian 13 template;
 - the SSH public keys to trust, combined from the orchestrator's own filesystem — never
-  entered by the operator (see [SSH key management](#ssh-key-management));
+  entered by the operator (see [SSH key management](#ssh-key-management-provisioning-time));
 - required Proxmox features and tags.
 
 A provisioning job should expose each stage independently so a failed Ansible run can be retried without recreating the LXC.
@@ -186,9 +189,11 @@ homelab-orchestrator/
 |-- HomelabOrchestrator.sln
 |-- src/
 |   `-- HomelabOrchestrator/
+|       |-- Authentication/
 |       |-- Authorization/
 |       |-- Data/
 |       |   `-- Migrations/
+|       |-- Endpoints/
 |       |-- Models/
 |       |-- Options/
 |       |-- Pages/
@@ -198,10 +203,12 @@ homelab-orchestrator/
 |       |   |-- Reconcile/
 |       |   |-- Maintenance/
 |       |   |-- Playbooks/
-|       |   `-- Executions/
+|       |   |-- Executions/
+|       |   `-- SshKeys/
 |       |-- Services/
 |       |   |-- Proxmox/
 |       |   |-- Ansible/
+|       |   |-- Ssh/
 |       |   `-- Jobs/
 |       `-- wwwroot/
 |-- ansible/
@@ -210,14 +217,18 @@ homelab-orchestrator/
 |   |-- playbooks/
 |   |   |-- apply-base.yml
 |   |   |-- ssh-check.yml
+|   |   |-- sync-ssh-keys.yml
 |   |   |-- maintenance/
 |   |   `-- catalog/
 |   `-- roles/
-|       `-- base/
+|       |-- base/
+|       |   |-- defaults/main.yml
+|       |   |-- handlers/main.yml
+|       |   |-- tasks/main.yml
+|       |   `-- templates/
+|       `-- sync_ssh_keys/
 |           |-- defaults/main.yml
-|           |-- handlers/main.yml
-|           |-- tasks/main.yml
-|           `-- templates/
+|           `-- tasks/main.yml
 `-- tests/
     `-- HomelabOrchestrator.Tests/
 ```
@@ -286,6 +297,13 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
     "InventoryFile": "inventory/orchestrator.yml",
     "TimeoutSeconds": 600
   },
+  "SshSync": {
+    "Exclusive": false
+  },
+  "Provisioning": {
+    "SshReadyTimeoutSeconds": 300,
+    "SshPollIntervalSeconds": 3
+  },
   "ConnectionStrings": {
     "Default": ""
   },
@@ -295,6 +313,15 @@ Non-secret defaults belong in `appsettings.json` or environment-specific configu
   }
 }
 ```
+
+`SshSync:Exclusive` governs how `sync-ssh-keys.yml` reconciles `/root/.ssh/authorized_keys` on
+managed containers — see [SSH key registry, enrollment, and sync](#ssh-key-registry-enrollment-and-sync-implemented)
+below. Leave it `false` until the registry is confirmed to hold every key that should have access.
+
+`Provisioning:SshReadyTimeoutSeconds` and `Provisioning:SshPollIntervalSeconds` govern how long a
+newly created container is given to start accepting SSH connections before provisioning is marked
+failed (the container is never deleted for this) — see
+[Provisioning workflow](#provisioning-workflow) below.
 
 `Ansible:RepositoryRoot` left blank (the default) resolves to the `ansible/` directory that ships
 alongside `src/` and `tests/` in this repository; set it explicitly if a deployment lays out
@@ -314,11 +341,12 @@ export Proxmox__ApiToken='automation@pve!homelab-orchestrator=TOKEN_SECRET'
 
 Never commit real tokens, passwords, private SSH keys, generated inventory, or playbook extra-variable files.
 
-## SSH key management
+## SSH key management (provisioning time)
 
 The orchestrator runs as root inside its own LXC, and provisioning uses that root account's own
-SSH material — there is no SSH field anywhere in the web UI, and no key ever passes through the
-browser or is stored on a job record.
+SSH material — there is no SSH field anywhere in the provisioning UI, and no key ever passes
+through the browser or is stored on a job record. This mechanism only affects **new** containers
+at creation time; see the next section for granting access to already-running containers.
 
 - **Workstation keys** (yours and anyone else who should be able to log into new containers) go
   in `/root/.ssh/authorized_keys` on the orchestrator, one public key per line — exactly like any
@@ -341,6 +369,66 @@ browser or is stored on a job record.
   keep whatever keys they were built with; update `authorized_keys` on a running container the
   same way you would on any other Linux host.
 
+## SSH key registry, enrollment, and sync (implemented)
+
+A second, separate mechanism grants an **already-running** container SSH access without
+re-provisioning it: a DB-backed registry of enrolled device keys, reviewed and approved by the
+operator, then pushed out on demand through the normal Ansible execution pipeline. This is
+additive to — and does not replace — the provisioning-time mechanism above.
+
+- **A device enrolls itself.** From the `/SshKeys` page, "Create enrollment token" generates a
+  cryptographically random, single-use token good for about 10 minutes, shown in plaintext exactly
+  once (only its hash is ever stored). The device then submits its own public key:
+
+  ```bash
+  curl -X POST https://<orchestrator-host>/api/ssh-keys/enroll \
+    -H "Authorization: Bearer <token>" \
+    -H "Content-Type: application/json" \
+    -d "{\"deviceName\": \"my-laptop\", \"publicKey\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
+  ```
+
+  This reads and sends the contents of the local **public** key file only — the private key never
+  leaves the device, and the `.pub` filename itself is irrelevant, only its content is submitted.
+  `POST /api/ssh-keys/enroll` authenticates the bearer token through a second, additional
+  authentication scheme used nowhere else in the app (the operator's own sign-in cookie plays no
+  part here), is rate-limited and size-capped, accepts only `ssh-ed25519` (preferred), ECDSA, or
+  RSA with a modulus of at least 3072 bits, rejects anything that looks like private-key material,
+  discards any comment in the submitted key, computes the key's fingerprint itself
+  (`SHA256:<...>`, the same format `ssh-keygen -lf` prints), rejects a fingerprint already on file,
+  and returns that fingerprint so the operator can compare it against what the device reports —
+  compare it before approving. Enrolling only ever creates a **Pending** key; it never grants
+  access and never triggers a sync by itself.
+- **The operator reviews and approves.** `/SshKeys` lists Pending, Enabled, and Revoked keys by
+  friendly device name and fingerprint. Approving, revoking, and synchronizing all show an
+  explicit warning and a confirm step first: approving a key grants it SSH access **once you
+  synchronize**, not immediately; revoking only takes effect on the **next** synchronization; a
+  Pending key that was never approved can be deleted outright with no confirmation, since it never
+  had access. Only the fingerprint and an operator-chosen device name are ever shown or stored —
+  never the original comment from the submitted key.
+- **"Synchronize now" pushes the current Enabled-key set to every managed container** through the
+  same Ansible execution pipeline every other playbook run uses — it shows up as a normal,
+  browsable run under [Job history](#job-history-implemented) with live output, not a hidden
+  side-channel. The orchestrator's own public key is always included in the payload, and the run
+  is refused before it starts if that key can't be read — synchronizing can never lock the
+  orchestrator's own automation out of the containers it manages. Keys and the exclusive-mode
+  setting are passed to Ansible as a private, restrictive-permission (`0600`) temporary
+  `--extra-vars @<file>`, never as command-line arguments, and the file is deleted immediately
+  after the run finishes, success or failure.
+- **`ansible/roles/sync_ssh_keys`** ensures `/root/.ssh` exists (`0700`), renders one normalized
+  key per line with an opaque `homelab-orchestrator-managed-<id>` comment (never the device name
+  or original comment), and either merges that block into `authorized_keys` alongside whatever
+  else is already there (default, `SshSync:Exclusive: false`) or atomically replaces the whole
+  file with exactly that block (`SshSync:Exclusive: true`) — validating the rendered content and
+  setting `root:root 0600` either way. Exclusive mode has its own pre-flight guard: the run refuses
+  outright if the orchestrator's own managed key isn't present in the payload. After writing,
+  the role re-verifies the connection is still reachable over SSH before reporting success, and
+  Ansible's own per-host failure reporting (visible in that run's Tasks/Hosts view) shows exactly
+  which containers succeeded or failed.
+- **Rollout guidance:** leave `SshSync:Exclusive` at its default (`false`, merge/preserve) while
+  building out the registry, so any key already on a container stays there. Only flip it to `true`
+  once you've confirmed the registry holds every key that should have access — from that point on,
+  a key present on a container but missing from the registry is removed on the next sync.
+
 ## Dynamic Ansible inventory
 
 ### Inventory API (implemented)
@@ -348,7 +436,7 @@ browser or is stored on a job record.
 The application exposes two read-only, unauthenticated JSON endpoints that generate a standard
 Ansible dynamic-inventory document (the same `_meta`/`hostvars` shape `ansible-inventory --list`
 and inventory scripts/plugins produce — see
-[SSH key management](#ssh-key-management) for where `ansible_user`/`ansible_port`/
+[SSH key management](#ssh-key-management-provisioning-time) for where `ansible_user`/`ansible_port`/
 `ansible_ssh_private_key_file` come from). Each host's hostvars also include `tags`: Proxmox's
 own semicolon-separated tag string (e.g. `base;managed-by-orchestrator;mqtt`), split, trimmed,
 and returned as a JSON array — always present, empty (`[]`) rather than missing or `null` for an
@@ -679,7 +767,7 @@ Requirements:
 - network access to the Proxmox API
 - a least-privilege Proxmox API token
 - an orchestrator SSH keypair at `/root/.ssh/id_ed25519(.pub)` and workstation keys in
-  `/root/.ssh/authorized_keys` (see [SSH key management](#ssh-key-management)) — provisioning
+  `/root/.ssh/authorized_keys` (see [SSH key management](#ssh-key-management-provisioning-time)) — provisioning
   runs without them, but new containers will have no key-based SSH access until they exist
 - Ansible Core (`ansible-playbook`/`ansible-inventory`) and SSH access to provisioned
   containers — required to use the [Ansible Runner](#ansible-runner-implemented) page;
@@ -724,12 +812,12 @@ ansible-inventory -i inventory/orchestrator.yml --list
 - [x] Create and start a Debian 13 LXC.
 - [x] Enable `nesting=1`.
 - [x] Poll and display background-job status with HTMX.
-- [ ] Wait for SSH.
-- [ ] Apply the Ansible `base` role.
-- [ ] Allow retrying the base stage without recreating the LXC.
-
-The last three items need Ansible integration, which is a separate, larger piece of work
-(see AGENTS.md's Ansible requirements) and has not been started.
+- [x] Wait for SSH.
+- [x] Apply the Ansible `base` role.
+- [x] Allow retrying the base stage without recreating the LXC — not a dedicated retry API, but
+      the same Runner-page "apply-base" run or SSH Keys page "Synchronize now" action an operator
+      would use for any other container, since the LXC is preserved and already a normal managed,
+      running container by the time either post-creation step could fail.
 
 ### Milestone 2: Maintenance
 

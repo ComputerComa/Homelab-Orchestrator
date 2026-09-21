@@ -74,13 +74,19 @@ The expected initial workflow is:
 6. Configure storage, CPU, memory, swap, network, DNS, tags, and the combined SSH public keys
    from `ISshPublicKeyProvider` (see [SSH key management](#ssh-key-management)).
 7. Wait for the Proxmox task to finish.
-8. Wait for SSH to become available.
-9. Run `ansible/playbooks/apply-base.yml` against the new address.
+8. Wait for SSH to become available (skipped for a container provisioned without starting it).
+9. Run `ansible/playbooks/apply-base.yml`, then synchronize the current SSH key registry (see
+   [SSH key management](#ssh-key-management)), both scoped to just this one new container via
+   `AnsibleRunTargetKind.Vm` — never the whole managed fleet.
 10. Record and display the outcome of every stage.
 
 Do not treat a browser preview of VMID or IP address as reserved. Recalculate them inside the serialized provisioning worker immediately before creation.
 
-If LXC creation succeeds but Ansible fails, preserve the LXC. Mark the Ansible stage failed and make it independently retryable.
+If LXC creation succeeds but Ansible fails, preserve the LXC. Mark the Ansible stage failed —
+`ProvisioningWorker` never deletes or rolls back the container for a post-creation configuration
+failure. Retrying is not a dedicated API: it's the same Runner-page "apply-base" run or SSH Keys
+page "Synchronize now" action an operator would use for any other container, since the new
+container is already an ordinary managed, running LXC by the time either step could fail.
 
 ## Container reconciliation
 
@@ -126,34 +132,111 @@ tags=base;managed-by-orchestrator
 
 ## SSH key management
 
-The orchestrator runs as root in its own LXC and uses that root account's own SSH material —
-there is no SSH input anywhere in the web UI.
+Two entirely separate mechanisms share this name — keep them separate in code and in docs.
+
+### Provisioning-time key injection (unchanged)
+
+The orchestrator runs as root in its own LXC and uses that root account's own SSH material to
+seed a **newly created** container. There is no SSH input anywhere in the provisioning UI, and
+this mechanism is untouched by the registry described below.
 
 - `SshOptions` (bound from the `Ssh` configuration section) holds `AuthorizedKeysPath`
   (default `/root/.ssh/authorized_keys`), `OrchestratorPublicKeyPath`
   (default `/root/.ssh/id_ed25519.pub`), `OrchestratorPrivateKeyPath`
   (default `/root/.ssh/id_ed25519`), `RemoteUser` (default `root`), and `Port` (default `22`).
-- `ISshPublicKeyProvider` asynchronously reads `AuthorizedKeysPath` and
+- `ISshPublicKeyProvider.GetCombinedPublicKeysAsync` asynchronously reads `AuthorizedKeysPath` and
   `OrchestratorPublicKeyPath`, ignores blank and comment-only lines, validates normal OpenSSH
   public-key records, deduplicates identical keys by key type and encoded key data, and returns
   deterministic newline-delimited text. It never reads, returns, or logs
-  `OrchestratorPrivateKeyPath`.
-- `ProvisioningWorker` calls the provider immediately before creating the container — the same
-  "never trust a stale value" rule that applies to VMID/address/template applies here: SSH keys
-  are never carried on `ProvisioningRequest`, `ContainerFormModel`, or a job record.
-- `OrchestratorPrivateKeyPath` is reserved for the future Ansible runner to connect back to
-  provisioned containers as `RemoteUser` on `Port`. Nothing in provisioning today reads it; do
-  not wire it up before the Ansible runner exists.
-- Never generate an SSH keypair automatically, copy the private key into a container, add an
-  SSH key field to any form or API response, or store key material on a job record.
+  `OrchestratorPrivateKeyPath`. `GetOrchestratorPublicKeyAsync` reads only
+  `OrchestratorPublicKeyPath` — used by the registry's sync lockout guard below.
+- `ProvisioningWorker` calls `GetCombinedPublicKeysAsync` immediately before creating the
+  container — the same "never trust a stale value" rule that applies to VMID/address/template
+  applies here: SSH keys are never carried on `ProvisioningRequest`, `ContainerFormModel`, or a
+  job record (`SshMaterialRemovalTests` guards these three types by reflection).
+- `OrchestratorPrivateKeyPath` is reserved for the Ansible runner to connect back to provisioned
+  containers as `RemoteUser` on `Port`. Never read, return, or log it — only its public half is
+  ever combined and sent to Proxmox or the registry sync below.
 - Changing `AuthorizedKeysPath` or the orchestrator's own key files only affects containers
-  created afterward; do not try to retroactively update already-provisioned containers.
+  created afterward; there is no retroactive update of already-provisioned containers from this
+  mechanism — that gap is exactly what the registry below exists to fill.
+
+### Centralized key registry, enrollment, and sync (a deliberate, scoped exception)
+
+A second, DB-backed mechanism lets an operator grant an **already-running** container SSH access
+without re-provisioning it. This is a deliberate, explicit exception to the "never add an SSH key
+field to any form or API response" rule above — that rule still governs
+`ProvisioningRequest`/`ContainerFormModel`/`ProvisioningJob` and provisioning-time injection; it
+does not apply to this registry, which exists specifically to hold enrolled public keys.
+
+- `Models/SshPublicKey.cs` (`SshPublicKeys` table) holds one enrolled device key: generated `Id`,
+  `DeviceName` (untrusted display metadata only — never used as identity), normalized `Algorithm`
+  and `KeyDataBase64` (comment always stripped), server-computed `Fingerprint`
+  (`SHA256:<base64-no-padding>`, unique-indexed — the actual duplicate-key guarantee), `Status`
+  (`Pending`/`Enabled`/`Revoked`), and creation/approval/revocation timestamps plus the approving/
+  revoking operator's username. Never stores private key material, ever.
+- `Models/SshEnrollmentToken.cs` (`SshEnrollmentTokens` table, a separate table from the keys
+  themselves) holds only a hash of a short-lived, single-use bearer token — the plaintext is never
+  persisted anywhere. `SshEnrollmentTokenHasher` is the one place that hashes a presented token;
+  both token issuance and authentication go through it so they hash identically.
+- `Services/Ssh/ISshKeyStore`/`EfSshKeyStore` and `ISshEnrollmentTokenStore`/
+  `EfSshEnrollmentTokenStore` are pure persistence (mirrors `EfAnsibleExecutionStore`'s
+  thin-store pattern) — no business rules. `ISshEnrollmentTokenStore.TryConsumeAsync` performs the
+  single-use burn as one atomic `ExecuteUpdateAsync` (`WHERE TokenHash=@h AND UsedAtUtc IS NULL
+  AND ExpiresAtUtc>@now`), never a separate check-then-write.
+- `Services/Ssh/ISshKeyManagementService`/`SshKeyManagementService` is the only thing Pages or the
+  enrollment endpoint call — it owns every rule: OpenSSH parsing (reuses the existing
+  `OpenSshPublicKey.TryParse`, never a second parser), algorithm allowlisting (`ssh-ed25519`
+  preferred, ECDSA, or RSA only with a modulus ≥3072 bits), rejecting anything that looks like
+  private-key material or spans multiple lines, discarding the submitted comment entirely,
+  duplicate-fingerprint rejection, approval-state transitions
+  (`Pending`→`Enabled`→`Revoked`, delete only while `Pending`), and the sync hand-off below. Token
+  validation is split into `IsValidAsync` (read-only, used by authentication) and
+  `TryConsumeAsync` (the actual burn, called only once every other part of an enrollment request
+  has already passed) so a malformed request body never invalidates a good, reusable-until-then
+  token.
+- `POST /api/ssh-keys/enroll` (`Endpoints/SshKeyEndpoints.cs`) is the only way a device submits its
+  own key. It authenticates via a second, additional authentication scheme
+  (`Authentication/EnrollmentTokenAuthenticationHandler.cs`, scheme name
+  `"SshEnrollmentToken"`) that validates only the bearer enrollment token — the operator's cookie
+  scheme is never consulted here and this scheme is never consulted anywhere else. The endpoint is
+  rate-limited (`Program.cs`'s `"SshEnrollment"` policy) and caps its own request body size
+  independently of model binding. It always saves a new key as `Pending` — it never grants access
+  and never triggers synchronization by itself. Never widen this scheme's claims or give it access
+  to any other endpoint.
+- Listing, approval, revocation, token creation, and synchronization all live under
+  `Pages/SshKeys/`, protected by the same `AuthorizeFolder("/")` convention as every other page —
+  no separate wiring needed. Approve, revoke, and synchronize all use the same review-then-confirm
+  htmx pattern as the Ansible Runner page (see [HTMX and UI conventions](#htmx-and-ui-conventions))
+  with an explicit warning: approving grants access once synchronized, revoking only takes effect
+  on the next sync, and exclusive-mode sync removes anything not present in the registry.
+- Synchronization goes through the normal Ansible execution pipeline
+  (`ISshKeyManagementService.SyncAsync` → `IAnsibleRunnerService.SubmitAsync`), producing an
+  ordinary persisted execution with live output and history — never a bespoke code path. It
+  queries only `Enabled` keys, and **always appends the orchestrator's own key** (from
+  `ISshPublicKeyProvider.GetOrchestratorPublicKeyAsync`) to the payload; if that key can't be
+  read, `SyncAsync` throws before ever submitting the run, so the app itself is the first lockout
+  guard. `ansible/playbooks/sync-ssh-keys.yml` / `ansible/roles/sync_ssh_keys/` is the second: its
+  pre-flight `assert` refuses an exclusive-mode run if the orchestrator's managed comment isn't
+  present in the payload. `SshSyncOptions.Exclusive` (config section `SshSync`, default `false`)
+  picks merge-preserving-unmanaged-keys (`blockinfile`) vs. full-replace
+  (`copy`+`validate`) — start `false` and only flip to `true` once the registry is confirmed
+  complete.
+- Never deploy the submitted device name or the original key comment to a container — the
+  rendered `authorized_keys` line uses only `Algorithm`/`KeyDataBase64` plus an opaque
+  `homelab-orchestrator-managed-<id>` (or `-self`) comment.
 
 ## Ansible requirements
 
 - Store roles, approved playbooks, metadata, and dependency declarations in Git.
 - Do not store a list of managed hosts in Git.
-- For a newly provisioned host, use an inline inventory or an execution-scoped generated inventory.
+- For a newly provisioned host, `ProvisioningWorker` submits `AnsibleRunTargetKind.Vm` with the
+  container's hostname — the same live Proxmox-discovered inventory as every other run
+  (`ansible-playbook -i inventory/orchestrator.yml --limit <hostname>`), narrowed with `--limit`
+  rather than a separate inline/ad-hoc inventory. This requires the container to already be
+  running with a resolvable address by the time the run is submitted, which
+  `ProvisioningWorker`'s own SSH-reachability wait (`ISshReachabilityChecker`) guarantees before
+  it ever submits anything.
 - For maintenance, discover hosts from Proxmox and generate inventory for the execution.
   `IAnsibleInventoryService` (`Services/Ansible/`) already does this — reuse it rather than
   writing a second inventory generator. It composes `IProxmoxService.ListContainersAsync` with
@@ -336,6 +419,11 @@ multi-user/RBAC model — do not add either without an explicit request.
   `OnRedirectToLogin`/`OnRedirectToAccessDenied` so a rejected `/api/...` call gets a plain `403`
   instead of a redirect to the HTML login page — keep that in place for any future API-shaped
   endpoint.
+- `Authentication/EnrollmentTokenAuthenticationHandler.cs` (scheme name `"SshEnrollmentToken"`,
+  policy of the same name) is a second, additional authentication scheme registered alongside the
+  cookie scheme above, not replacing it — see [SSH key management](#ssh-key-management). It
+  authenticates only a bearer enrollment token for `POST /api/ssh-keys/enroll`; every other page
+  and endpoint keeps using the cookie scheme exclusively.
 
 ## Jobs and concurrency
 
@@ -362,7 +450,9 @@ multi-user/RBAC model — do not add either without an explicit request.
   crash the worker's outer loop — the terminal-state save happens in its own try/catch outside
   every stage-determining catch block, for exactly this reason.
 
-Suggested provisioning stages:
+`ProvisioningStage` (`Services/Jobs/`) implements all of these except `Cancelled`, which stays
+suggested-only — like `AnsibleRunStage.Cancelled`, there is no cancel action anywhere in the app
+yet:
 
 ```text
 Queued
@@ -373,7 +463,7 @@ WaitingForSsh
 ApplyingBase
 Succeeded
 Failed
-Cancelled
+Cancelled (not yet implemented)
 ```
 
 ## Security
@@ -381,6 +471,7 @@ Cancelled
 - Never commit or print real credentials.
 - Never return secrets in API responses, HTML, validation messages, or execution logs.
 - Never read, return, or log the orchestrator's private key (`Ssh:OrchestratorPrivateKeyPath`); only its public half is ever combined and sent to Proxmox.
+- Never persist an SSH enrollment token's plaintext — only its hash (`SshEnrollmentTokenHasher`); rate-limit and size-cap the enrollment endpoint, and never let it grant access or trigger sync by itself.
 - Do not place secret values in process arguments when a protected file or environment variable is supported.
 - Every page requires a signed-in operator except `/Account/Login` — see [Authentication](#authentication).
 - Scope a same-machine-only endpoint to loopback with the `LocalhostOnly` policy; don't rely on

@@ -17,6 +17,7 @@ public class AnsibleProcessRunner(IOptions<AnsibleOptions> options, ILogger<Ansi
     public async Task<int> RunPlaybookAsync(
         string playbookPath,
         string? limit,
+        string? extraVarsFilePath,
         Action<AnsibleLogStream, string> onOutputLine,
         CancellationToken cancellationToken = default)
     {
@@ -39,6 +40,14 @@ public class AnsibleProcessRunner(IOptions<AnsibleOptions> options, ILogger<Ansi
         {
             startInfo.ArgumentList.Add("--limit");
             startInfo.ArgumentList.Add(limit);
+        }
+
+        if (!string.IsNullOrWhiteSpace(extraVarsFilePath))
+        {
+            // Ansible's own @file convention — variable content (which may include key material)
+            // is read from the file, never interpolated into a command-line argument.
+            startInfo.ArgumentList.Add("--extra-vars");
+            startInfo.ArgumentList.Add($"@{extraVarsFilePath}");
         }
 
         startInfo.ArgumentList.Add(playbookPath);

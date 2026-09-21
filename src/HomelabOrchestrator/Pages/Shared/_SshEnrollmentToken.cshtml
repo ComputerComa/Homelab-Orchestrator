@@ -1,0 +1,38 @@
+@model string
+
+<div class="card">
+    <h2>Enrollment token created</h2>
+
+    <div class="banner banner-warning">
+        <p>
+            This token is shown once and is never stored anywhere except as a hash — copy it now.
+            It expires in about 10 minutes, or immediately after it's used to enroll a key,
+            whichever comes first.
+        </p>
+    </div>
+
+    <div class="field">
+        <label for="enrollment-token">One-time enrollment token</label>
+        <div class="copy-row">
+            <code id="enrollment-token" class="copy-target">@Model</code>
+            <button type="button" class="btn btn-secondary btn-small copy-btn" data-copy-target="enrollment-token">Copy</button>
+        </div>
+    </div>
+
+    <div class="field">
+        <label for="enrollment-curl">Enrollment example — run this on the new device</label>
+        <div class="copy-row">
+            <pre id="enrollment-curl" class="copy-target">curl -X POST https://&lt;orchestrator-host&gt;/api/ssh-keys/enroll \
+  -H "Authorization: Bearer @Model" \
+  -H "Content-Type: application/json" \
+  -d "{\"deviceName\": \"my-laptop\", \"publicKey\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"</pre>
+            <button type="button" class="btn btn-secondary btn-small copy-btn" data-copy-target="enrollment-curl">Copy</button>
+        </div>
+        <p class="muted">
+            This reads and sends the contents of your <strong>public</strong> key file only — nothing
+            else on the device is touched. Your private key never leaves the device, and nothing is
+            transferred to any container until you approve the resulting pending key below and
+            synchronize.
+        </p>
+    </div>
+</div>

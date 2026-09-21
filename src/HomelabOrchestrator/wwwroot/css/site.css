@@ -8,6 +8,7 @@
     --accent: #4f8cff;
     --success: #2e7d32;
     --error: #b3261e;
+    --warning: #c9962c;
 }
 
 * {
@@ -253,6 +254,10 @@ body {
     border-color: var(--error);
 }
 
+.banner-warning {
+    border-color: var(--warning);
+}
+
 .run-output {
     margin-top: 0.75rem;
     padding: 0.75rem;
@@ -397,6 +402,39 @@ body {
 .status-badge-interrupted {
     background: color-mix(in srgb, var(--muted) 22%, transparent);
     color: var(--muted);
+}
+
+.copy-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.copy-row .copy-target {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.copy-row code.copy-target {
+    padding: 0.5rem 0.6rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+}
+
+.copy-row pre.copy-target {
+    margin: 0;
+    padding: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .htmx-indicator {

@@ -1,3 +1,5 @@
+using System.Threading.RateLimiting;
+using HomelabOrchestrator.Authentication;
 using HomelabOrchestrator.Authorization;
 using HomelabOrchestrator.Data;
 using HomelabOrchestrator.Endpoints;
@@ -7,8 +9,10 @@ using HomelabOrchestrator.Services.Jobs;
 using HomelabOrchestrator.Services.Provisioning;
 using HomelabOrchestrator.Services.Proxmox;
 using HomelabOrchestrator.Services.Ssh;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -52,6 +56,14 @@ builder.Services
     });
 
 builder.Services
+    .AddOptions<SshSyncOptions>()
+    .Bind(builder.Configuration.GetSection(SshSyncOptions.SectionName));
+
+builder.Services
+    .AddOptions<ProvisioningOptions>()
+    .Bind(builder.Configuration.GetSection(ProvisioningOptions.SectionName));
+
+builder.Services
     .AddOptions<AdminOptions>()
     .Bind(builder.Configuration.GetSection(AdminOptions.SectionName))
     .Validate(
@@ -77,6 +89,13 @@ builder.Services.AddHttpContextAccessor();
 builder.Services
     .AddAuthentication(IdentityConstants.ApplicationScheme)
     .AddIdentityCookies();
+
+// A second, additional scheme — the cookie scheme above stays the default everywhere else.
+// Authenticates only the one-time enrollment bearer token for POST /api/ssh-keys/enroll; never
+// consulted for, and never grants access to, any cookie-authenticated page or endpoint.
+builder.Services
+    .AddAuthentication()
+    .AddScheme<AuthenticationSchemeOptions, EnrollmentTokenAuthenticationHandler>(EnrollmentTokenAuthenticationHandler.SchemeName, _ => { });
 builder.Services
     .AddIdentityCore<IdentityUser>(options => options.SignIn.RequireConfirmedAccount = false)
     .AddEntityFrameworkStores<ApplicationDbContext>()
@@ -110,8 +129,37 @@ static Task RejectApiRequestsWithForbidden(Microsoft.AspNetCore.Authentication.R
 // only caller (via the homelab_orchestrator inventory plugin hitting http://localhost), so they
 // never need to be reachable from the network the rest of the app listens on.
 builder.Services.AddAuthorization(options =>
-    options.AddPolicy("LocalhostOnly", policy => policy.Requirements.Add(new LocalhostOnlyRequirement())));
+{
+    options.AddPolicy("LocalhostOnly", policy => policy.Requirements.Add(new LocalhostOnlyRequirement()));
+
+    // Pins the enrollment endpoint to only the bearer-token scheme above — the signed-in
+    // operator's cookie is never consulted here, and this scheme is never consulted anywhere else.
+    options.AddPolicy("SshEnrollmentToken", policy => policy
+        .AddAuthenticationSchemes(EnrollmentTokenAuthenticationHandler.SchemeName)
+        .RequireAuthenticatedUser());
+});
 builder.Services.AddSingleton<IAuthorizationHandler, LocalhostOnlyHandler>();
+
+// A fixed-window limit on the enrollment endpoint: 5 requests/minute per client IP, no queuing
+// (QueueLimit 0 — a rejected caller gets an immediate 429, never a delayed success) since this is
+// a security-sensitive, unauthenticated-by-cookie endpoint.
+builder.Services.AddRateLimiter(options =>
+{
+    options.OnRejected = (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        return ValueTask.CompletedTask;
+    };
+
+    options.AddPolicy("SshEnrollment", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+});
 
 // Proxmox service: the only thing that touches Corsinvest.ProxmoxVE.Api. Singleton so its
 // PveClient (and internal HttpClient) is built once and reused instead of per-call.
@@ -119,6 +167,14 @@ builder.Services.AddSingleton<IProxmoxService, ProxmoxService>();
 
 // Reads workstation + orchestrator public keys from disk; never touches the private key.
 builder.Services.AddSingleton<ISshPublicKeyProvider, SshPublicKeyProvider>();
+
+// A bare TCP-level check used to detect when a freshly created container is ready for Ansible.
+builder.Services.AddSingleton<ISshReachabilityChecker, SshReachabilityChecker>();
+
+// Centralized SSH public-key registry: enrollment, approval, revocation, and Ansible-driven sync.
+builder.Services.AddSingleton<ISshKeyStore, EfSshKeyStore>();
+builder.Services.AddSingleton<ISshEnrollmentTokenStore, EfSshEnrollmentTokenStore>();
+builder.Services.AddSingleton<ISshKeyManagementService, SshKeyManagementService>();
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenAnyIP(5050);
@@ -195,7 +251,9 @@ app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapRazorPages();
 app.MapInventoryEndpoints();
+app.MapSshKeyEndpoints();
 
 app.Run();
