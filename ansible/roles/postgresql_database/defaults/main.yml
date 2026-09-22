@@ -1,0 +1,13 @@
+---
+# Hostname of the shared PostgreSQL LXC as it appears in Proxmox/Ansible inventory.
+postgresql_database_server: postgresql
+
+postgresql_database_name: ""
+postgresql_database_user: ""
+postgresql_database_password: ""
+
+# By default, allow only the application LXC running this role.
+postgresql_database_client_address: "{{ ansible_host }}"
+
+postgresql_database_port: 5432
+postgresql_database_auth_method: scram-sha-256

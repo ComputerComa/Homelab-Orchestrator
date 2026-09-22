@@ -1,0 +1,6 @@
+---
+- name: Reload PostgreSQL
+  ansible.builtin.systemd:
+    name: postgresql
+    state: reloaded
+  delegate_to: "{{ postgresql_database_server }}"

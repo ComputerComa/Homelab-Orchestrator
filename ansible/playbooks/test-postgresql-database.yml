@@ -1,0 +1,11 @@
+---
+- name: Test PostgreSQL database provisioning
+  hosts: all
+  gather_facts: true
+
+  roles:
+    - role: postgresql_database
+      vars:
+        postgresql_database_name: ansible_test
+        postgresql_database_user: ansible_test
+        postgresql_database_password: "{{ test_postgresql_password }}"

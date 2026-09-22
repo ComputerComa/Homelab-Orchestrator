@@ -2,3 +2,4 @@
 collections:
   # Needed later for the timezone/locale_gen modules the base role will use.
   - name: community.general
+  - name: community.postgresql
