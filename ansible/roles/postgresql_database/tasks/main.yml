@@ -1,0 +1,63 @@
+---
+- name: Validate PostgreSQL database role variables
+  ansible.builtin.assert:
+    that:
+      - postgresql_database_name | length > 0
+      - postgresql_database_user | length > 0
+      - postgresql_database_password | length > 0
+      - postgresql_database_client_address | length > 0
+    fail_msg: >-
+      postgresql_database_name, postgresql_database_user,
+      postgresql_database_password, and postgresql_database_client_address
+      must all be provided.
+  no_log: true
+
+- name: Install PostgreSQL Ansible dependency
+  ansible.builtin.apt:
+    name:
+      - python3-psycopg
+    state: present
+    update_cache: true
+  delegate_to: "{{ postgresql_database_server }}"
+
+- name: Determine PostgreSQL HBA file
+  community.postgresql.postgresql_query:
+    login_db: postgres
+    query: SHOW hba_file;
+  become: true
+  become_user: postgres
+  delegate_to: "{{ postgresql_database_server }}"
+  register: postgresql_database_hba_query
+
+- name: Create application PostgreSQL role
+  community.postgresql.postgresql_user:
+    name: "{{ postgresql_database_user }}"
+    password: "{{ postgresql_database_password }}"
+    role_attr_flags: LOGIN
+    state: present
+  become: true
+  become_user: postgres
+  delegate_to: "{{ postgresql_database_server }}"
+  no_log: true
+
+- name: Create application PostgreSQL database
+  community.postgresql.postgresql_db:
+    name: "{{ postgresql_database_name }}"
+    owner: "{{ postgresql_database_user }}"
+    encoding: UTF8
+    state: present
+  become: true
+  become_user: postgres
+  delegate_to: "{{ postgresql_database_server }}"
+
+- name: Permit application host to connect to PostgreSQL
+  community.postgresql.postgresql_pg_hba:
+    dest: "{{ postgresql_database_hba_query.query_result[0].hba_file }}"
+    contype: host
+    databases: "{{ postgresql_database_name }}"
+    users: "{{ postgresql_database_user }}"
+    source: "{{ postgresql_database_client_address }}/32"
+    method: "{{ postgresql_database_auth_method }}"
+    state: present
+  delegate_to: "{{ postgresql_database_server }}"
+  notify: Reload PostgreSQL
