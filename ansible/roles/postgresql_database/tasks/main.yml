@@ -22,7 +22,7 @@
 
 - name: Determine PostgreSQL HBA file
   community.postgresql.postgresql_query:
-    db: postgres
+    login_db: postgres
     query: SHOW hba_file;
   become: true
   become_user: postgres
